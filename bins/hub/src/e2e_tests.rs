@@ -834,3 +834,30 @@ fn a_late_progress_report_of_a_job_that_is_over_does_not_bring_its_row_back() {
     assert!(!fx.eng.handle(late), "nothing changed");
     assert_eq!(fx.row("mdedit"), Row::Update);
 }
+
+/// "Update all" (the tray menu has it too) with an app open leaves a question, which only a
+/// window can show: the engine says so, the shell makes a window for it, and an answer, or
+/// closing the window, ends it.
+#[test]
+fn an_update_that_waits_for_an_answer_asks_for_a_window_to_ask_in() {
+    use crate::tray::wants_window;
+    let mut fx = two_with_updates("ask-window");
+    assert!(!fx.eng.asking());
+    fx.cmd(Cmd::UpdateAll);
+    fx.settle();
+    assert!(
+        fx.file("mdview", "mdview.exe") == Some(body("n")),
+        "mdview is updated"
+    );
+    assert!(fx.eng.asking(), "mdedit is open: a question waits");
+    assert!(wants_window(fx.eng.asking(), false), "no window: make one");
+    assert!(!wants_window(fx.eng.asking(), true), "a window is there");
+    // Closing the window answers "Not now" (the shell applies it): nothing is left to ask.
+    fx.cmd(Cmd::BannerNo);
+    assert!(!fx.eng.asking());
+    assert!(!wants_window(fx.eng.asking(), false));
+    assert!(
+        fx.file("mdedit", "mdedit.exe") == Some(body("a")),
+        "left alone"
+    );
+}

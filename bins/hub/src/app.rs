@@ -662,6 +662,7 @@ impl ApplicationHandler<Event> for App {
                 self.sync_tray();
                 self.check_restart();
                 self.test_auto_restart();
+                self.open_to_ask(event_loop);
             }
         }
         if self.exit_now {
@@ -958,6 +959,9 @@ impl App {
         match d {
             Do::Destroy => {
                 self.life = l;
+                // Closing the window on the offer bar's question is "Not now": the question does
+                // not stay behind to open the window again.
+                self.engine.apply(Cmd::BannerNo);
                 self.destroy_window();
             }
             Do::Exit => self.request_exit(),
@@ -991,8 +995,16 @@ impl App {
             }
             TrayCmd::Quit => self.request_exit(),
         }
+        self.open_to_ask(event_loop);
         self.sync_tray();
         self.dirty = true;
+    }
+
+    /// The engine has a question only a window can show (`tray::wants_window`): make one.
+    fn open_to_ask(&mut self, event_loop: &ActiveEventLoop) {
+        if !self.exit_now && tray::wants_window(self.engine.asking(), self.window.is_some()) {
+            self.open(event_loop);
+        }
     }
 
     /// Gives the tray the engine's current picture (badge, tooltip, menu) when it changed, and

@@ -228,6 +228,14 @@ pub fn step(l: Life, i: Input) -> (Life, Do) {
     }
 }
 
+/// Must a window be made now? The engine asks whether an open app may be closed (the offer
+/// bar) and there is no window to ask in: "Update all" in the tray menu with an app open, or a
+/// queued update whose app was opened meanwhile. Without this the update would wait, unseen, for
+/// an answer nobody was asked for.
+pub fn wants_window(asking: bool, window: bool) -> bool {
+    asking && !window
+}
+
 /// Is there to be a tray icon? `--no-tray` says no, `--tray` says yes (a window-less Hub must
 /// have one), otherwise the setting `tray` (default on). A `--demo` picture never has one.
 pub fn wants_tray(flag: bool, no_flag: bool, setting: bool, demo: bool) -> bool {

@@ -994,6 +994,11 @@ impl Engine {
         changed
     }
 
+    /// Is the offer bar asking whether an open app may be closed? Only a window can show it.
+    pub fn asking(&self) -> bool {
+        self.fixed.is_none() && self.banner.is_some()
+    }
+
     /// The "..." menu of an app: what it offers and whether each item can be used now.
     pub fn menu_items(&self, id: &str) -> Vec<(MenuItem, &'static str, bool)> {
         let Some(slot) = self.slots.iter().find(|s| s.app.id == id) else {
