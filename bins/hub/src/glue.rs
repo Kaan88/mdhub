@@ -322,6 +322,11 @@ pub fn fail_text(e: &InstallError) -> String {
     t.chars().take(300).collect()
 }
 
+/// What the status line says when a roll back is asked for while the app is open.
+fn roll_back_open(name: &str) -> String {
+    format!("Close {name} first, then roll back")
+}
+
 fn age_text(done: u64, now: u64) -> String {
     let s = now.saturating_sub(done);
     match s {
@@ -1390,6 +1395,15 @@ impl Engine {
             if self.slot(id).is_none() {
                 continue;
             }
+            if kind == JobKind::Rollback {
+                // Opened since it was queued: not started (see `menu_pick`).
+                self.refresh_one(id);
+                if let Some(s) = self.slot(id).filter(|s| s.running) {
+                    self.notice = Some(roll_back_open(s.app.name));
+                    self.set_phase(id, Phase::Idle);
+                    continue;
+                }
+            }
             if kind == JobKind::Install {
                 // The app may have been opened since it was queued: ask before closing it.
                 let yes = self.consented.iter().position(|c| *c == id);
@@ -1531,6 +1545,14 @@ impl Engine {
             MenuItem::RollBack => {
                 if !self.can_roll_back(slot) {
                     return false;
+                }
+                // A roll back replaces the program's files: an open app would have to be closed,
+                // and nothing closes one without a yes. The offer bar asks about updates only,
+                // so this is not started; the user closes the app and picks it again.
+                self.refresh_one(id);
+                if self.slot(id).is_some_and(|s| s.running) {
+                    self.notice = Some(roll_back_open(app.name));
+                    return true;
                 }
                 self.enqueue(id, JobKind::Rollback)
             }

@@ -861,3 +861,30 @@ fn an_update_that_waits_for_an_answer_asks_for_a_window_to_ask_in() {
         "left alone"
     );
 }
+
+/// A roll back replaces the program's files like an update does, so the same promise holds: an
+/// open app is never closed without a yes. The offer bar asks about updates only, so a roll back
+/// of an open app is not started at all; the status line says what to do.
+#[test]
+fn a_roll_back_never_closes_an_open_app() {
+    let mut fx = two_with_updates("rollback-open");
+    fx.shell.running.store(false, Ordering::SeqCst);
+    fx.cmd(Cmd::Update("mdedit"));
+    fx.settle();
+    assert!(fx.file("mdedit", "mdedit.exe") == Some(body("b")));
+    // mdedit is opened; "Roll back" is picked from its menu.
+    fx.shell.running.store(true, Ordering::SeqCst);
+    assert!(fx.eng.apply(Cmd::MenuPick("mdedit", MenuItem::RollBack)));
+    assert!(!fx.eng.installing(), "nothing was started");
+    let said = fx.vm().checked;
+    assert!(said.contains("mdedit") && said.contains("lose"), "{said}");
+    assert!(
+        fx.file("mdedit", "mdedit.exe") == Some(body("b")),
+        "untouched"
+    );
+    // Closed by its user, it rolls back.
+    fx.shell.running.store(false, Ordering::SeqCst);
+    fx.cmd(Cmd::MenuPick("mdedit", MenuItem::RollBack));
+    fx.settle();
+    assert!(fx.file("mdedit", "mdedit.exe") == Some(body("a")));
+}
