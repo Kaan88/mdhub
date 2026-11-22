@@ -1,0 +1,135 @@
+# A release is cut by pushing the tag v<version> after `ci` is green on main (docs/RELEASE.md).
+# Builds hub.exe on windows-latest, the installer, hub-update.txt (Hub's own self-update manifest)
+# and hub.txt (Hub's entry in the family's manifest format), checks every hash, and creates the
+# release. workflow_dispatch with publish=false builds and checks everything and publishes nothing.
+# Not run yet: nothing is tagged (the owner has not said to cut a release).
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Create the GitHub release (false = build and check only)'
+        type: boolean
+        default: false
+      version:
+        description: 'Version to build when run by hand (X.Y.Z); a tag run takes it from the tag'
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: 1.99.1
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Version
+        id: v
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag') { $v = $env:GITHUB_REF_NAME.TrimStart('v') } else { $v = '${{ inputs.version }}' }
+          if ($v -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$') { throw "bad version '$v'" }
+          $cargo = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ($cargo -ne $v) { throw "Cargo.toml says $cargo but the release is $v" }
+          "version=$v" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+
+      - name: Test
+        run: cargo test --release --locked --workspace --no-fail-fast
+
+      - name: Build hub.exe
+        run: cargo build --release --locked -p hub
+
+      - name: Version resource is in the exe
+        shell: pwsh
+        run: |
+          $got = (Get-Item target/release/hub.exe).VersionInfo.FileVersion
+          if ($got -ne '${{ steps.v.outputs.version }}') { throw "hub.exe says '$got'" }
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $iscc = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Inno Setup *\ISCC.exe", "$env:ProgramFiles\Inno Setup *\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $iscc) { throw 'ISCC.exe not found after the install' }
+          "ISCC=$($iscc.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Installer
+        shell: pwsh
+        run: |
+          & $env:ISCC "/DAppVersion=${{ steps.v.outputs.version }}" packaging/windows/hub.iss
+          if ($LASTEXITCODE) { throw "ISCC failed: $LASTEXITCODE" }
+
+      - name: Assemble the release files and manifests
+        shell: pwsh
+        run: |
+          $v = '${{ steps.v.outputs.version }}'
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/hub.exe dist/hub.exe
+          Copy-Item "target/installer/Hub-Setup-$v.exe" dist/
+          $notes = ''
+          if (Test-Path "docs/release-notes/$v.md") { $notes = (Get-Content "docs/release-notes/$v.md" -TotalCount 1) }
+          $global:LASTEXITCODE = 0
+          & ./tools/write-hub-update.ps1 -Version $v -Notes $notes -Exe dist/hub.exe -AssetName hub.exe -Out dist/hub-update.txt
+          if ($LASTEXITCODE) { throw 'write-hub-update failed' }
+          $files = @(
+            @{ Name = 'hub.exe'; Path = 'dist/hub.exe'; Role = 'file' },
+            @{ Name = "Hub-Setup-$v.exe"; Path = "dist/Hub-Setup-$v.exe"; Role = 'setup'; Silent = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'; Scope = 'user' }
+          )
+          $global:LASTEXITCODE = 0
+          # In-process (&), not a child pwsh: the file list is hashtables, which a child would get as text.
+          & ./tools/write-hub-txt.ps1 -App hub -Repo hub-rs -Version $v -Notes $notes -Kind files -Exe hub.exe -Uninstall '{A3D5E8C1-7B42-4F96-8E1D-5C0B2F7A9D64}_is1' -Files $files -Out dist/hub.txt
+          if ($LASTEXITCODE) { throw 'write-hub-txt failed' }
+
+      - name: Check every hash against the files
+        shell: pwsh
+        run: |
+          $v = '${{ steps.v.outputs.version }}'
+          $exe = (Get-FileHash -Algorithm SHA256 dist/hub.exe).Hash.ToLowerInvariant()
+          $setup = (Get-FileHash -Algorithm SHA256 "dist/Hub-Setup-$v.exe").Hash.ToLowerInvariant()
+          $update = Get-Content dist/hub-update.txt -Raw
+          $hubtxt = Get-Content dist/hub.txt -Raw
+          foreach ($pair in @(@('hub-update.txt', $update, $exe), @('hub.txt', $hubtxt, $exe), @('hub.txt', $hubtxt, $setup))) {
+            if ($pair[1] -notmatch [regex]::Escape($pair[2])) { throw "$($pair[0]) does not carry the SHA-256 $($pair[2])" }
+          }
+          if ($update -notmatch "version: $([regex]::Escape($v))") { throw 'hub-update.txt has the wrong version' }
+          Get-Content dist/hub-update.txt, dist/hub.txt
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hub-release-files
+          path: dist/*
+          retention-days: 14
+
+      - name: Create the release
+        if: ${{ github.event_name == 'push' || inputs.publish }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = '${{ steps.v.outputs.version }}'
+          $title = "Hub $v"
+          $notesFile = "docs/release-notes/$v.md"
+          $args = @('release', 'create', "v$v", '--title', $title, '--latest', '--target', $env:GITHUB_SHA)
+          if (Test-Path $notesFile) { $args += @('--notes-file', $notesFile) } else { $args += @('--notes', "Hub $v.") }
+          if ($v -match '-') { $args = $args | Where-Object { $_ -ne '--latest' }; $args += '--prerelease' }
+          $args += @('dist/hub.exe', "dist/Hub-Setup-$v.exe", 'dist/hub-update.txt', 'dist/hub.txt')
+          gh @args
+          if ($LASTEXITCODE) { throw 'gh release create failed' }
