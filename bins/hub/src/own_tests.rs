@@ -192,6 +192,36 @@ fn a_staged_file_that_changed_is_refused_and_the_exe_stays() {
     assert!(matches!(fx.eng.hub_status(), Status::Failed(_)));
 }
 
+/// A check is told which version is already downloaded and does not fetch it again. If that
+/// version stops being ready while the check is out (the restart failed), the check's answer
+/// must not be taken for "a download is on its way": none is, and Hub would sit in
+/// "Downloading" for ever, refusing every later check.
+#[test]
+fn a_restart_that_fails_while_a_check_is_out_does_not_leave_hub_downloading_for_ever() {
+    let (mut fx, exe) = world("own-race");
+    publish_hub(&fx, "0.2.0", b"new hub bytes");
+    fx.check();
+    assert!(matches!(fx.eng.hub_status(), Status::Ready(_)));
+    // The second check starts knowing 0.2.0 is ready ...
+    fx.cmd(Cmd::CheckNow);
+    assert!(fx.eng.checking());
+    // ... and before it reports, the staged file is found changed at "Restart now".
+    std::fs::write(staged_of(&exe), b"something else").unwrap();
+    fx.cmd(Cmd::HubRestart);
+    assert!(matches!(fx.eng.hub_status(), Status::Failed(_)));
+    fx.settle();
+    assert!(
+        !matches!(fx.eng.hub_status(), Status::Downloading(_)),
+        "nothing is downloading: {:?}",
+        fx.eng.hub_status()
+    );
+    assert!(fx.eng.wait(check::now()).is_some(), "the next check is due");
+    // The next check fetches it again.
+    fx.check();
+    assert!(matches!(fx.eng.hub_status(), Status::Ready(_)));
+    assert_eq!(std::fs::read(staged_of(&exe)).unwrap(), b"new hub bytes");
+}
+
 #[test]
 fn a_download_that_does_not_match_its_hash_is_never_staged() {
     let (mut fx, exe) = world("own-badhash");

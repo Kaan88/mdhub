@@ -680,6 +680,9 @@ struct Own {
     when_idle: bool,
     /// The swap is done: the shell ends the process and starts the new Hub from this exe.
     restart: Option<PathBuf>,
+    /// The version the check that is out was told is downloaded already: that one it does not
+    /// fetch again, whatever has become of it since.
+    told_ready: Option<mdshared_app::update::Version>,
 }
 
 impl Own {
@@ -690,6 +693,7 @@ impl Own {
             dismissed: false,
             when_idle: false,
             restart: None,
+            told_ready: None,
         }
     }
 }
@@ -1446,12 +1450,13 @@ impl Engine {
         }
         self.first = None;
         self.notice = None;
+        self.own.told_ready = match &self.own.status {
+            Status::Ready(s) => Some(s.version.clone()),
+            _ => None,
+        };
         let hub = self.own.exe.clone().map(|exe| work::HubJob {
             exe,
-            ready: match &self.own.status {
-                Status::Ready(s) => Some(s.version.clone()),
-                _ => None,
-            },
+            ready: self.own.told_ready.clone(),
         });
         match work::spawn_check(
             self.post.clone(),
@@ -1571,9 +1576,12 @@ impl Engine {
     fn handle_hub(&mut self, ev: HubEvent) -> bool {
         match ev {
             HubEvent::Checked(Ok(Some(o))) => {
-                // A version already downloaded stays ready; a different one is fetched next.
-                let same = matches!(&self.own.status, Status::Ready(s) if s.version == o.version);
-                if !same {
+                // The worker fetches it next, unless it was told at its start that this version
+                // is downloaded already. Then nothing is on its way, and the status is left as it
+                // is: ready still, or failed since (a restart that could not swap it in), which a
+                // later check fetches again. Calling that "downloading" would wait for an answer
+                // that never comes and refuse every check after it.
+                if self.own.told_ready.as_ref() != Some(&o.version) {
                     self.own.status = Status::Downloading(o.version);
                 }
                 true
