@@ -165,7 +165,10 @@ tooltip. Limits follow `NOTIFYICONDATAW` (body 200, tip 120 UTF-16 units).
 icon. A start that times out sets `cancelled` and leaves no thread. A balloon waits for an
 icon instead of being dropped. `icon.rs`: the tile and the badge are drawn with the shared
 painter twice (over black and over white) and the alpha solved from both, digits from a 3 x 5
-pixel font, one `HICON` per change of the count. Not covered: the real Explorer restart and the
+pixel font, one `HICON` per change of the count. The mark is a white hub joined to four nodes in
+the apps' colours on a dark tile, laid out in whole device pixels and mirrored, so 16 px is
+sharp; the badge takes the place of the fourth node. It is the only drawing: `tools/make-icon.ps1`
+packs `assets/hub.ico` from this module's output (`-Sheet file.png` for a sheet to look at). Not covered: the real Explorer restart and the
 icon seen live (CLAUDE.md rule 6).
 
 ## settings.rs (bins/hub)
