@@ -324,8 +324,15 @@ fn command_bar(p: &mut Painter, pal: &Palette, w: f32, vm: &Vm, lay: &mut Layout
     let y = r.y + (BAR_H - 32.0) / 2.0;
     let cy = y + 16.0;
     // The right group first, so the left one knows how much room it has.
+    // The sliders button (settings) is the last thing on the right.
+    let gear = Rect::new(w - 8.0 - 32.0, y, 32.0, 32.0);
+    if let Some(fill) = button_fill(pal, false, false, false, false) {
+        p.rbox(gear, 6.0, fill);
+    }
+    p.icon(glyph::SLIDERS, 15.0, gear.cx(), cy, pal.text);
+    lay.hits.push((gear, Hit::Settings));
     let seg = 30.0;
-    let sr = Rect::new(w - 8.0 - (3.0 * seg + 2.0), y, 3.0 * seg + 2.0, 32.0);
+    let sr = Rect::new(gear.x - 8.0 - (3.0 * seg + 2.0), y, 3.0 * seg + 2.0, 32.0);
     p.frame(sr, 6.0, pal.field, pal.line);
     for (k, (g, v)) in [
         (ui::LIST_ICON, View::List),
@@ -796,7 +803,7 @@ fn status_bar(p: &mut Painter, pal: &Palette, r: Rect, w: f32, vm: &Vm) {
         if !right.is_empty() {
             right.push_str(" \u{b7} ");
         }
-        right.push_str(&format!("Hub {}", ui::cap(&vm.hub_version, 20)));
+        right.push_str(&format!("Hub {}", ui::cap(&vm.hub_version, 40)));
     }
     let rw = p.text_right(Face::Ui, 12.0, r.right() - 14.0, cy, &right, pal.muted);
     p.text(

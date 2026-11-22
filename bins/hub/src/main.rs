@@ -21,6 +21,7 @@ mod glue;
 mod grid;
 mod icon;
 mod panes;
+mod settings;
 mod shot;
 mod trace;
 mod tray;
@@ -56,5 +57,7 @@ fn main() {
 mod e2e_tests;
 #[cfg(test)]
 mod glue_tests;
+#[cfg(test)]
+mod own_tests;
 #[cfg(test)]
 mod tests;

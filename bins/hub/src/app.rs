@@ -8,14 +8,18 @@ use crate::glue::{
     self, Cmd, Deps, Engine, Event, Key, MenuItem, Post, RealShell, Tmpl, command, key_command,
     repeatable,
 };
+use crate::settings;
 use crate::trace::Trace;
 use crate::tray::{self, Do, Input, Life, Snapshot, TrayCmd};
 use crate::view::{self, HEAD_H, ROW_H};
 use crate::vm::{Hit, Layout, View, Vm};
 use hub_core::check;
+use hub_core::selfupdate;
 use hub_core::state::Store;
 use mdshared_text::bitmap::Bitmap;
 use mdshared_ui::gfx::{Face, Gfx, Painter, Rect, mix};
+use mdshared_ui::keys::{Mods, key_name};
+use mdshared_ui::settings::{Form, Outcome};
 use mdshared_ui::theme::{DARK, LIGHT, Palette};
 use mdshared_ui::window::edge_at;
 use std::num::NonZeroU32;
@@ -113,11 +117,10 @@ struct App {
     tray: Option<tray::Tray>,
     /// The last snapshot the tray was given: a new one is sent only when it differs.
     last_snap: Snapshot,
-    /// "Notify about updates" (setting `notify`, default on).
-    notify: bool,
-    /// What the menu's "Start with Windows" shows (the settings record; the registry is the
-    /// start-with-Windows work's).
-    start_with_windows: bool,
+    /// The settings card (the sliders button), open: kept as the form the user is working in.
+    settings: Option<Form>,
+    /// Hub's own update was swapped in: when the loop ends, this exe is started.
+    restart_exe: Option<std::path::PathBuf>,
     /// The tray is wanted and not started yet (a window-first launch starts it after the first
     /// frame). Cleared by the attempt.
     want_tray: bool,
@@ -202,6 +205,7 @@ impl App {
         if self.engine.apply(cmd) {
             self.dirty = true;
         }
+        self.check_restart();
         self.keep_selection_visible();
     }
 
@@ -261,6 +265,9 @@ impl App {
         if let Some(pop) = &self.popup {
             draw_popup(&mut p, &pal, pop);
         }
+        if let Some(form) = &mut self.settings {
+            form.draw(&mut p, &pal, Rect::new(0.0, 0.0, lw, lh), false);
+        }
         self.layout = layout;
         self.vm = vm;
         self.dirty = false;
@@ -296,6 +303,12 @@ impl App {
 
     fn cursor_moved(&mut self, x: f32, y: f32) {
         self.mouse = (x, y);
+        if let Some(form) = &mut self.settings {
+            if form.pointer_move(x, y) {
+                self.dirty = true;
+            }
+            return;
+        }
         if let Some(pop) = &mut self.popup {
             let h = pop.at(x, y);
             if h != pop.hover {
@@ -361,6 +374,7 @@ impl App {
             Hit::Min => window.set_minimized(true),
             Hit::Max => window.set_maximized(!window.is_maximized()),
             Hit::Close => self.request_close(),
+            Hit::Settings => self.open_settings(0),
             Hit::None => {
                 // A click on nothing leaves the filter box.
                 self.apply(Cmd::FilterBlur);
@@ -373,6 +387,127 @@ impl App {
                     None => {}
                 }
             }
+        }
+    }
+
+    // ---- the settings card ----
+
+    /// Opens the card from the engine's rows: a form built now, so it shows what is true now.
+    fn open_settings(&mut self, page: usize) {
+        self.popup = None;
+        self.settings = Some(settings::form(self.engine.settings_rows(), page));
+        self.dirty = true;
+    }
+
+    /// The card shows the engine's rows: a change made elsewhere (the tray menu, a failed write)
+    /// replaces them. Rows equal to what it shows are left alone, so an open dropdown stays open.
+    fn sync_settings(&mut self) {
+        if let Some(f) = &mut self.settings {
+            let rows = self.engine.settings_rows();
+            if f.rows() != rows.as_slice() {
+                f.set_rows(rows);
+                self.dirty = true;
+            }
+        }
+    }
+
+    fn settings_key(&mut self, ev: &KeyEvent) {
+        let Some(k) = key_name(&ev.logical_key) else {
+            return;
+        };
+        let mods = Mods::from_winit(self.mods);
+        let outcome = match &mut self.settings {
+            Some(f) => f.key(&k, mods, ev.text.as_ref().map(|t| t.as_str())),
+            None => return,
+        };
+        self.settings_outcome(outcome);
+    }
+
+    fn settings_press(&mut self) {
+        let (x, y) = self.mouse;
+        let mods = Mods::from_winit(self.mods);
+        let outcome = match &mut self.settings {
+            Some(f) => f.press(x, y, mods, 1),
+            None => return,
+        };
+        self.settings_outcome(outcome);
+    }
+
+    fn settings_release(&mut self) {
+        let (x, y) = self.mouse;
+        let outcome = match &mut self.settings {
+            Some(f) => f.release(x, y),
+            None => return,
+        };
+        self.settings_outcome(outcome);
+    }
+
+    /// What the card said: apply the change, press the button, or go away.
+    fn settings_outcome(&mut self, o: Outcome) {
+        match o {
+            Outcome::None | Outcome::Unused => return,
+            Outcome::Redraw => {}
+            Outcome::Closed => self.settings = None,
+            Outcome::Changed { id, value } => {
+                self.engine.change_setting(id, value);
+                self.settings_changed();
+            }
+            Outcome::Action(id) => {
+                self.engine.setting_action(id);
+                self.settings_changed();
+            }
+        }
+        self.dirty = true;
+    }
+
+    /// A setting changed (in the card or in the tray menu): the icon, the menu and the card
+    /// follow the engine.
+    fn settings_changed(&mut self) {
+        self.apply_tray_setting();
+        self.sync_tray();
+        self.check_restart();
+    }
+
+    /// The icon follows the setting (and `--tray`, `--no-tray`): made when it was turned on,
+    /// removed when it was turned off.
+    fn apply_tray_setting(&mut self) {
+        let want = tray::wants_tray(
+            self.args.tray,
+            self.args.no_tray,
+            self.engine.tray_on(),
+            self.args.demo.is_some(),
+        );
+        if want && self.tray.is_none() {
+            self.start_tray();
+        } else if !want && self.tray.is_some() {
+            self.tray = None;
+            self.engine.set_tray_up(false);
+        }
+    }
+
+    /// A test run (`--features test-hooks`, `HUB_TEST_AUTO_RESTART` naming a marker file that does
+    /// not exist yet): presses "Restart now" once Hub's own update is ready, as a click would,
+    /// and leaves the marker so the restarted Hub does not do it again. Not in a release build.
+    #[cfg(feature = "test-hooks")]
+    fn test_auto_restart(&mut self) {
+        let Some(marker) = std::env::var_os("HUB_TEST_AUTO_RESTART").map(std::path::PathBuf::from)
+        else {
+            return;
+        };
+        if matches!(self.engine.hub_status(), selfupdate::Status::Ready(_)) && !marker.exists() {
+            let _ = std::fs::write(&marker, b"restarted");
+            self.apply(Cmd::BannerYes);
+        }
+    }
+
+    #[cfg(not(feature = "test-hooks"))]
+    fn test_auto_restart(&mut self) {}
+
+    /// Hub's own update was swapped in: the loop ends and the new Hub is started.
+    fn check_restart(&mut self) {
+        if let Some(exe) = self.engine.take_restart() {
+            self.restart_exe = Some(exe);
+            self.exit_now = true;
         }
     }
 
@@ -405,6 +540,10 @@ impl App {
 
     fn key(&mut self, ev: KeyEvent) {
         if ev.state != ElementState::Pressed {
+            return;
+        }
+        if self.settings.is_some() {
+            self.settings_key(&ev);
             return;
         }
         if self.popup.is_some() {
@@ -510,7 +649,15 @@ impl ApplicationHandler<Event> for App {
                 if self.engine.handle(ev) {
                     self.dirty = true;
                 }
+                // One balloon per check that found news (the rule is the engine's).
+                if let Some(m) = self.engine.take_message()
+                    && let Some(t) = &self.tray
+                {
+                    t.show_balloon(&m.title, &m.body);
+                }
                 self.sync_tray();
+                self.check_restart();
+                self.test_auto_restart();
             }
         }
         if self.exit_now {
@@ -544,9 +691,10 @@ impl ApplicationHandler<Event> for App {
                 }
                 self.dirty = true;
             }
-            WindowEvent::Focused(true) => {
+            WindowEvent::Focused(focused) => {
+                self.engine.set_focused(focused);
                 // An app may have been started or closed meanwhile.
-                if self.last_running.elapsed() >= RUNNING_EVERY {
+                if focused && self.last_running.elapsed() >= RUNNING_EVERY {
                     self.last_running = Instant::now();
                     self.engine.refresh_running_async();
                 }
@@ -566,12 +714,30 @@ impl ApplicationHandler<Event> for App {
                 state: ElementState::Pressed,
                 button: MouseButton::Left,
                 ..
-            } => self.click(),
+            } => {
+                if self.settings.is_some() {
+                    self.settings_press();
+                } else {
+                    self.click();
+                }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+                ..
+            } => self.settings_release(),
             WindowEvent::MouseWheel { delta, .. } => {
                 let dy = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y * ROW_H,
                     MouseScrollDelta::PixelDelta(p) => p.y as f32 / self.scale,
                 };
+                if let Some(f) = &mut self.settings {
+                    // The card scrolls towards its end when the wheel turns down.
+                    if f.wheel(self.mouse.0, self.mouse.1, -dy) {
+                        self.dirty = true;
+                    }
+                    return;
+                }
                 let next = (self.scroll - dy).clamp(0.0, self.max_scroll);
                 if next != self.scroll {
                     self.scroll = next;
@@ -721,12 +887,11 @@ impl App {
         if self.tray.is_some() {
             return true;
         }
-        let snap = self
-            .engine
-            .tray_snapshot(check::now(), self.notify, self.start_with_windows);
+        let snap = self.engine.tray_snapshot(check::now());
         match tray::Tray::start(self.post.clone(), snap.clone()) {
             Some(t) => {
                 self.tray = Some(t);
+                self.engine.set_tray_up(true);
                 self.last_snap = snap;
                 self.trace.stage("tray icon up");
                 self.trace.memory("tray up");
@@ -751,6 +916,8 @@ impl App {
     /// fonts and glyph caches. The engine stays: it is what the tray lives on.
     fn destroy_window(&mut self) {
         self.popup = None;
+        self.settings = None;
+        self.engine.set_focused(false);
         self.surface = None;
         self.window = None;
         self.bmp = Bitmap::new(1, 1);
@@ -812,24 +979,24 @@ impl App {
             TrayCmd::UpdateAll => self.apply(Cmd::UpdateAll),
             TrayCmd::CheckNow => self.apply(Cmd::CheckNow),
             TrayCmd::OpenApp(id) => self.apply(Cmd::Open(id)),
-            TrayCmd::ToggleNotify => {
-                self.notify = !self.notify;
-                self.engine.store.set_notify_enabled(self.notify);
+            // The menu and the card change the same settings through the engine.
+            TrayCmd::ToggleNotify => self.engine.set_notify(!self.engine.notify_on()),
+            TrayCmd::ToggleStart => {
+                let on = self.engine.autostart_on();
+                self.engine.set_autostart(!on);
             }
-            // Writing and removing the Run key is the start-with-Windows work (`autostart`); the
-            // menu line is here and its click arrives here. Nothing is written by this build.
-            TrayCmd::ToggleStart => eprintln!("hub: start with Windows is not wired yet"),
             TrayCmd::Quit => self.request_exit(),
         }
         self.sync_tray();
+        self.dirty = true;
     }
 
-    /// Gives the tray the engine's current picture (badge, tooltip, menu) when it changed.
+    /// Gives the tray the engine's current picture (badge, tooltip, menu) when it changed, and
+    /// the open settings card the engine's rows.
     fn sync_tray(&mut self) {
+        self.sync_settings();
         let Some(t) = &self.tray else { return };
-        let s = self
-            .engine
-            .tray_snapshot(check::now(), self.notify, self.start_with_windows);
+        let s = self.engine.tray_snapshot(check::now());
         if s != self.last_snap {
             t.update(s.clone());
             self.last_snap = s;
@@ -861,6 +1028,10 @@ impl App {
         self.trace.cpu("exit");
         // The icon goes before the process does, so no ghost is left in the notification area.
         self.tray = None;
+        // Ending (not restarting): a downloaded Hub is swapped in now, so the next start is it.
+        if self.restart_exe.is_none() {
+            self.engine.apply_hub_on_quit();
+        }
         event_loop.exit();
     }
 }
@@ -897,7 +1068,6 @@ pub fn run(mut args: Args, started: Instant) -> i32 {
     let proxy = event_loop.create_proxy();
     let post: Arc<dyn Post> = Arc::new(Proxy(Mutex::new(proxy.clone())));
     let mut single = None;
-    let (mut tray_setting, mut notify, mut start_with_windows) = (false, false, false);
     let engine = match &args.demo {
         Some(name) => match demo::build(name, args.view.unwrap_or(View::List)) {
             Some(vm) => Engine::demo(vm, post.clone()),
@@ -909,6 +1079,13 @@ pub fn run(mut args: Args, started: Instant) -> i32 {
         None => {
             let store = Store::open();
             let settings = store.dir.join("settings.ini");
+            // Started by Hub's own update: the old Hub is still ending, and would be mistaken
+            // for a running one (and handed this launch) without the wait.
+            mdshared_app::relaunch::wait_for_predecessor(
+                args.restarted
+                    .then(|| mdshared_app::relaunch::FLAG.to_string()),
+                &settings,
+            );
             if args.tray {
                 // Started by the Run key while Hub already runs: nothing to open, nothing to wake.
                 if mdshared_app::single::alive(&settings) {
@@ -922,11 +1099,12 @@ pub fn run(mut args: Args, started: Instant) -> i32 {
             single = mdshared_app::single::listen_requests_waking("hub", &settings, move || {
                 let _ = waker.send_event(Event::Raise);
             });
-            (tray_setting, notify, start_with_windows) = (
-                store.tray_enabled(),
-                store.notify_enabled(),
-                store.autostart_enabled(),
-            );
+            // What an earlier update left beside this exe (`.old`, `.new`) goes now that this is
+            // the only Hub running: two small file removals, nothing when there are none.
+            let hub_exe = selfupdate::installed_exe();
+            if let Some(exe) = &hub_exe {
+                selfupdate::clean_up(exe);
+            }
             let first =
                 cli::first_check(&args, std::env::var("HUB_FIRST_CHECK_MS").ok().as_deref());
             let engine = Engine::new(Deps {
@@ -937,13 +1115,20 @@ pub fn run(mut args: Args, started: Instant) -> i32 {
                 shell: Arc::new(RealShell),
                 tmpl: Tmpl::real(),
                 first_check: Some(first),
+                hub_exe,
+                run_key: glue::system_run_key(),
             });
             trace.stage("engine loaded (cached releases, what is installed)");
             engine
         }
     };
     let vm = engine.vm(check::now());
-    let want_tray = tray::wants_tray(args.tray, args.no_tray, tray_setting, args.demo.is_some());
+    let want_tray = tray::wants_tray(
+        args.tray,
+        args.no_tray,
+        engine.tray_on(),
+        args.demo.is_some(),
+    );
     let mut app = App {
         exit_at: args
             .exit_after_ms
@@ -981,8 +1166,8 @@ pub fn run(mut args: Args, started: Instant) -> i32 {
         want_tray,
         post,
         last_snap: Snapshot::default(),
-        notify,
-        start_with_windows,
+        settings: None,
+        restart_exe: None,
         opens: 0,
         single,
     };
@@ -996,13 +1181,39 @@ pub fn run(mut args: Args, started: Instant) -> i32 {
             eprintln!("hub: no tray icon: opening the window instead");
         }
     }
-    match event_loop.run_app(&mut app) {
+    let result = event_loop.run_app(&mut app);
+    // Hub's own update was swapped in: the window is closed, the icon is gone, the single-instance
+    // lock goes with this process; the new Hub waits for that (`--restarted`).
+    if let Some(exe) = app.restart_exe.take() {
+        restart_hub(&exe, &app.args);
+    }
+    match result {
         Ok(()) => 0,
         Err(e) => {
             eprintln!("hub: {e}");
             1
         }
     }
+}
+
+/// Starts the new Hub from `exe` the way Hub was running: under the tray when it was started
+/// with `--tray` (and the test flags `--behind`, `--no-tray` as they were). Nothing is started
+/// when `exe` is not there; the old Hub has ended by then and the next launch is the new one.
+fn restart_hub(exe: &std::path::Path, args: &Args) {
+    let Some(target) = selfupdate::restart_target(exe) else {
+        return;
+    };
+    let mut cmd = mdshared_app::relaunch::command(&target);
+    for (on, flag) in [
+        (args.tray, "--tray"),
+        (args.behind, "--behind"),
+        (args.no_tray, "--no-tray"),
+    ] {
+        if on {
+            cmd.arg(flag);
+        }
+    }
+    let _ = cmd.spawn();
 }
 
 #[cfg(test)]

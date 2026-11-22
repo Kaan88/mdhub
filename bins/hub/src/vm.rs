@@ -60,6 +60,9 @@ pub struct Vm {
     /// Filter text of the apps filter box.
     pub filter: String,
     pub filter_focus: bool,
+    /// A picture of the settings card over the window (`--demo settings-...`): its rows and the
+    /// category shown. The real window keeps a form of its own, so this is None there.
+    pub settings: Option<(Vec<mdshared_ui::settings::Row>, usize)>,
 }
 
 /// What a row or tile's button does.
@@ -86,6 +89,8 @@ pub enum Hit {
     CancelAll,
     ViewSwitch(View),
     Filter,
+    /// The sliders button: the settings card. The shell's own, like the window buttons.
+    Settings,
     /// The row's or tile's body.
     Row(usize),
     /// The row's or tile's button.

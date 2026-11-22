@@ -1,5 +1,6 @@
 //! Fake Vm states for the pictures and the tests: `hub --shot out.png --demo NAME`.
 //! Everything here is made up; nothing reads this PC.
+use crate::settings;
 use crate::vm::{AppVm, Banner, View, Vm};
 use hub_core::catalog::{CATALOG, CatalogApp};
 use hub_core::model::Row;
@@ -15,6 +16,9 @@ pub const NAMES: &[&str] = &[
     "banner",
     "all",
     "empty",
+    "settings-general",
+    "settings-updates",
+    "settings-about",
 ];
 
 fn cat(id: &str) -> &'static CatalogApp {
@@ -247,12 +251,40 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
         "banner" => {
             let mut v = build("main", view)?;
             v.banner = Some(Banner {
-                text: "Hub 0.2.0 is ready. Restart Hub to finish the update.".into(),
+                // The words the engine gives (`selfupdate::Status::label`).
+                text: "Hub 0.2.0 is ready: restart to finish".into(),
                 yes: "Restart now".into(),
                 no: "Later".into(),
                 warn: false,
             });
+            v.hub_version = "0.1.0 (0.2.0 ready)".into();
             v.hover = Some(1);
+            v
+        }
+        // The sliders button's card over the main window; the About page with Hub's own update
+        // downloaded and its banner showing.
+        "settings-general" | "settings-updates" | "settings-about" => {
+            let about = name == "settings-about";
+            let mut v = build(if about { "banner" } else { "main" }, view)?;
+            let m = settings::Model {
+                start: true,
+                tray: true,
+                notify: true,
+                interval_hours: 6,
+                version: "0.1.0".into(),
+                hub_status: if about {
+                    "Hub 0.2.0 is ready: restart to finish".into()
+                } else {
+                    "No update found at the last check".into()
+                },
+                hub_button: if about { "Restart now" } else { "Update Hub" },
+            };
+            let page = match name {
+                "settings-updates" => 1,
+                "settings-about" => 2,
+                _ => 0,
+            };
+            v.settings = Some((settings::rows(&m), page));
             v
         }
         "all" => {

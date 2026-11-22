@@ -571,6 +571,8 @@ fn nothing_is_asked_at_start_and_the_first_check_is_scheduled_not_run() {
             shell: fx.shell.clone(),
             tmpl: Tmpl::real(),
             first_check: first,
+            hub_exe: None,
+            run_key: crate::glue::RunKey::none(),
         })
     };
     let mut e = mk(Some((Duration::from_secs(120), false)));

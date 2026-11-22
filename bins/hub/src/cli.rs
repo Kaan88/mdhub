@@ -28,6 +28,9 @@ pub struct Args {
     pub quit: bool,
     /// A test run: a balloon with this text a moment after the icon is up.
     pub tray_test_balloon: Option<String>,
+    /// Started by Hub's own update (`mdshared_app::relaunch::FLAG`): wait for the old Hub to go
+    /// before looking for a running one.
+    pub restarted: bool,
 }
 
 pub fn parse(args: &[String]) -> Result<Args, String> {
@@ -42,6 +45,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "--tray" => a.tray = true,
             "--no-tray" => a.no_tray = true,
             "--quit" => a.quit = true,
+            "--restarted" => a.restarted = true,
             "--tray-test-balloon" => {
                 a.tray_test_balloon =
                     Some(it.next().ok_or("--tray-test-balloon needs a text")?.clone())

@@ -11,10 +11,14 @@ use hub_core::detect::{self, Env};
 use hub_core::install::{Closer, Elevation, InstallError, Opts, Progress, RealCloser};
 use hub_core::manifest;
 use hub_core::model::{HubManifest, Installed, Kind, Latest, Row, Scope, Source};
+use hub_core::notify::{Memory, Message, Pending};
+use hub_core::selfupdate::{self, Apply, Offer, Staged, Status};
 use hub_core::state::{Store, ViewMode};
 use hub_core::transport::Transport;
+use mdshared_ui::settings::{Row as SettingRow, Value};
+use std::cell::Cell;
 use std::collections::VecDeque;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -39,6 +43,17 @@ pub enum Event {
     Raise,
     /// The tray icon's menu, its icon or its balloon was used (`tray.rs`). Acted on by the shell.
     Tray(crate::tray::TrayCmd),
+    /// Hub's own update, looked at and downloaded on the check's worker.
+    Hub(HubEvent),
+}
+
+/// What the check worker found out about Hub's own update.
+#[derive(Clone, Debug)]
+pub enum HubEvent {
+    /// Hub's manifest was read: a newer Hub, none, or why not.
+    Checked(Result<Option<Offer>, String>),
+    /// The newer Hub was downloaded and verified (written beside the running exe), or why not.
+    Staged(Result<Staged, String>),
 }
 
 /// Where a worker posts its events (the window's event loop, or a channel in a test).
@@ -103,6 +118,60 @@ pub struct Deps {
     pub tmpl: Tmpl,
     /// The first check: after this long since start, and whether it runs even when not due.
     pub first_check: Option<(Duration, bool)>,
+    /// The exe Hub would replace to update itself; None when this copy cannot (a build folder).
+    pub hub_exe: Option<PathBuf>,
+    /// Where "Start with Windows" is written.
+    pub run_key: RunKey,
+}
+
+/// Where "Start with Windows" lives: a value under `HKCU\<key>` that starts `exe --tray`. The
+/// real one is the Run key and the installed exe; a test names a key of its own.
+#[derive(Clone, Debug)]
+pub struct RunKey {
+    pub key: String,
+    pub value: String,
+    /// What the value starts; None: this copy cannot be started at login (a build folder).
+    pub exe: Option<PathBuf>,
+}
+
+impl RunKey {
+    /// The real Run key, for the installed Hub. A copy that is not installed (a cargo build
+    /// folder) has no exe to put there, so the setting is refused rather than writing the path of
+    /// a build output into the owner's startup list.
+    pub fn real() -> RunKey {
+        RunKey {
+            key: hub_core::autostart::RUN_KEY.to_string(),
+            value: hub_core::autostart::RUN_VALUE.to_string(),
+            exe: selfupdate::installed_exe(),
+        }
+    }
+
+    /// No key at all: every attempt is refused (the picture of `--demo`, tests that do not care).
+    pub fn none() -> RunKey {
+        RunKey {
+            key: String::new(),
+            value: String::new(),
+            exe: None,
+        }
+    }
+}
+
+/// The Run key this run uses: the real one, except in a build with `test-hooks`, where
+/// `HUB_RUN_KEY_PATH` names a key under `HKCU` (a test's own, never the real Run key) and the
+/// value is started from this very exe.
+pub fn system_run_key() -> RunKey {
+    #[cfg(feature = "test-hooks")]
+    if let Some(k) = std::env::var("HUB_RUN_KEY_PATH")
+        .ok()
+        .filter(|k| !k.is_empty())
+    {
+        return RunKey {
+            key: k,
+            value: hub_core::autostart::RUN_VALUE.to_string(),
+            exe: std::env::current_exe().ok(),
+        };
+    }
+    RunKey::real()
 }
 
 /// The detection environment: the PC's own, except in a build with `test-hooks`, where
@@ -414,7 +483,7 @@ pub fn command(hit: Hit, vm: &Vm) -> Option<Cmd> {
         Hit::Menu(i) => id(i).map(|_| Cmd::OpenMenu(i)),
         Hit::BannerYes => Some(Cmd::BannerYes),
         Hit::BannerNo => Some(Cmd::BannerNo),
-        Hit::Drag | Hit::Min | Hit::Max | Hit::Close | Hit::None => None,
+        Hit::Drag | Hit::Min | Hit::Max | Hit::Close | Hit::Settings | Hit::None => None,
     }
 }
 
@@ -551,6 +620,48 @@ pub struct Engine {
     interval: u32,
     first: Option<(Duration, bool)>,
     started: Instant,
+    own: Own,
+    tell: Tell,
+    run_key: RunKey,
+    /// "Start with Windows" as the registry says, read when first wanted (never at start).
+    autostart: Cell<Option<bool>>,
+    tray_on: bool,
+}
+
+/// Hub's own update: where it stands, and what is waiting to be done with it.
+struct Own {
+    exe: Option<PathBuf>,
+    status: Status,
+    /// "Later" was pressed on the banner for the version that is ready.
+    dismissed: bool,
+    /// "Restart now" was pressed while an install ran: swap when the installs are done.
+    when_idle: bool,
+    /// The swap is done: the shell ends the process and starts the new Hub from this exe.
+    restart: Option<PathBuf>,
+}
+
+impl Own {
+    fn new(exe: Option<PathBuf>) -> Own {
+        Own {
+            exe,
+            status: Status::None,
+            dismissed: false,
+            when_idle: false,
+            restart: None,
+        }
+    }
+}
+
+/// What Hub tells the user after a check: the rule's memory, the message waiting to be shown, and
+/// what decides whether to tell at all.
+struct Tell {
+    mem: Memory,
+    msg: Option<Message>,
+    on: bool,
+    /// The tray icon is up: only then can anything be told.
+    tray_up: bool,
+    /// The window is open and has the focus: the user is looking at the answer.
+    focused: bool,
 }
 
 fn view_of(m: ViewMode) -> View {
@@ -587,6 +698,11 @@ impl Engine {
             d.store.failures(),
             d.store.interval_hours(),
         );
+        let (notified, notify_on, tray_on) = (
+            d.store.notified(),
+            d.store.notify_enabled(),
+            d.store.tray_enabled(),
+        );
         Engine {
             store: d.store,
             env: d.env,
@@ -615,6 +731,17 @@ impl Engine {
             interval,
             first: d.first_check,
             started: Instant::now(),
+            own: Own::new(d.hub_exe),
+            tell: Tell {
+                mem: Memory::from_line(&notified),
+                msg: None,
+                on: notify_on,
+                tray_up: false,
+                focused: false,
+            },
+            run_key: d.run_key,
+            autostart: Cell::new(None),
+            tray_on,
         }
     }
 
@@ -654,6 +781,17 @@ impl Engine {
             interval: 0,
             first: None,
             started: Instant::now(),
+            own: Own::new(None),
+            tell: Tell {
+                mem: Memory::new(),
+                msg: None,
+                on: false,
+                tray_up: false,
+                focused: false,
+            },
+            run_key: RunKey::none(),
+            autostart: Cell::new(Some(false)),
+            tray_on: false,
         }
     }
 
@@ -661,9 +799,24 @@ impl Engine {
         self.fixed.is_some()
     }
 
+    /// A test points the engine at the exe it may replace and the registry key it may write.
+    #[cfg(test)]
+    pub fn set_hub_exe(&mut self, exe: Option<PathBuf>) {
+        self.own.exe = exe;
+    }
+
+    #[cfg(test)]
+    pub fn set_run_key(&mut self, k: RunKey) {
+        self.run_key = k;
+        self.autostart.set(None);
+    }
+
     /// Is any work in flight (a check, an install, a queued install)?
     pub fn busy(&self) -> bool {
-        self.active.is_some() || self.checking || !self.queue.is_empty()
+        self.active.is_some()
+            || self.checking
+            || !self.queue.is_empty()
+            || matches!(self.own.status, Status::Downloading(_))
     }
 
     /// Is an install or a roll back running or waiting? (A check may be dropped at exit; this may
@@ -731,15 +884,26 @@ impl Engine {
             ),
             (n, _) => format!("Updating {n} apps\u{2026}"),
         });
-        let banner = self.banner.and_then(|id| {
-            let name = CATALOG.iter().find(|c| c.id == id)?.name;
-            Some(Banner {
-                text: format!("{name} is open: close it and update"),
-                yes: "Close and update".into(),
-                no: "Not now".into(),
-                warn: false,
+        let banner = self
+            .banner
+            .and_then(|id| {
+                let name = CATALOG.iter().find(|c| c.id == id)?.name;
+                Some(Banner {
+                    text: format!("{name} is open: close it and update"),
+                    yes: "Close and update".into(),
+                    no: "Not now".into(),
+                    warn: false,
+                })
             })
-        });
+            // Hub's own update, once it is downloaded: after an app's question, never over it.
+            .or_else(|| {
+                self.hub_banner_shown().then(|| Banner {
+                    text: self.own.status.label(),
+                    yes: "Restart now".into(),
+                    no: "Later".into(),
+                    warn: false,
+                })
+            });
         let checked = if self.checking {
             "Checking\u{2026}".to_string()
         } else if let Some(n) = &self.notice {
@@ -763,7 +927,11 @@ impl Engine {
             view: self.view,
             banner: banner.or_else(|| self.fixed.as_ref().and_then(|v| v.banner.clone())),
             checked,
-            hub_version: env!("CARGO_PKG_VERSION").to_string(),
+            hub_version: match &self.own.status {
+                Status::Ready(s) => format!("{} ({} ready)", env!("CARGO_PKG_VERSION"), s.version),
+                _ => env!("CARGO_PKG_VERSION").to_string(),
+            },
+            settings: None,
             busy: busy.or_else(|| self.fixed.as_ref().and_then(|v| v.busy.clone())),
             updates,
             filter: self.filter.clone(),
@@ -816,16 +984,16 @@ impl Engine {
     // ---- the tray ----
 
     /// What the tray's badge, tooltip and menu are built from: the updates waiting and the apps
-    /// installed. `notify` and `start_with_windows` are settings the shell knows, not the engine.
-    pub fn tray_snapshot(
-        &self,
-        now: u64,
-        notify: bool,
-        start_with_windows: bool,
-    ) -> crate::tray::Snapshot {
+    /// installed, with the two settings the menu shows. Hub's own update counts in the badge but
+    /// not in "Update all".
+    pub fn tray_snapshot(&self, now: u64) -> crate::tray::Snapshot {
         let mut snap = crate::tray::Snapshot {
-            notify,
-            start_with_windows,
+            notify: self.tell.on,
+            start_with_windows: self.autostart_on(),
+            hub_update: matches!(
+                self.own.status,
+                Status::Available(_) | Status::Downloading(_) | Status::Ready(_)
+            ),
             ..Default::default()
         };
         for s in &self.slots {
@@ -927,6 +1095,10 @@ impl Engine {
                     self.pending_close.clear();
                     self.banner = None;
                     true
+                } else if self.hub_banner_shown() {
+                    // The same as Later.
+                    self.own.dismissed = true;
+                    true
                 } else if !self.filter.is_empty() {
                     self.filter.clear();
                     self.sel = 0;
@@ -997,11 +1169,19 @@ impl Engine {
                     self.enqueue(id, JobKind::Install);
                     true
                 }
-                None => false,
+                // No app is asking: the bar is Hub's own, "Restart now".
+                None => self.hub_restart(),
             },
             Cmd::BannerNo => {
                 self.pending_close.clear();
-                self.banner.take().is_some()
+                if self.banner.take().is_some() {
+                    true
+                } else if self.hub_banner_shown() {
+                    self.own.dismissed = true;
+                    true
+                } else {
+                    false
+                }
             }
             Cmd::MenuPick(id, item) => self.menu_pick(id, item),
         }
@@ -1211,10 +1391,18 @@ impl Engine {
         }
         self.first = None;
         self.notice = None;
+        let hub = self.own.exe.clone().map(|exe| work::HubJob {
+            exe,
+            ready: match &self.own.status {
+                Status::Ready(s) => Some(s.version.clone()),
+                _ => None,
+            },
+        });
         match work::spawn_check(
             self.post.clone(),
             self.transport.clone(),
             self.store.clone(),
+            hub,
         ) {
             Ok(()) => {
                 self.checking = true;
@@ -1312,12 +1500,294 @@ impl Engine {
         changed
     }
 
+    // ---- Hub's own update ----
+
+    /// The bar over the list asks "Restart now": Hub's own update is downloaded, and "Later" was
+    /// not pressed for it.
+    fn hub_banner_shown(&self) -> bool {
+        !self.own.dismissed && matches!(self.own.status, Status::Ready(_))
+    }
+
+    /// Where Hub's own update stands.
+    pub fn hub_status(&self) -> &Status {
+        &self.own.status
+    }
+
+    fn handle_hub(&mut self, ev: HubEvent) -> bool {
+        match ev {
+            HubEvent::Checked(Ok(Some(o))) => {
+                // A version already downloaded stays ready; a different one is fetched next.
+                let same = matches!(&self.own.status, Status::Ready(s) if s.version == o.version);
+                if !same {
+                    self.own.status = Status::Downloading(o.version);
+                }
+                true
+            }
+            HubEvent::Checked(Ok(None)) => {
+                if matches!(self.own.status, Status::Ready(_)) {
+                    false
+                } else {
+                    self.own.status = Status::None;
+                    true
+                }
+            }
+            // Offline, or no manifest yet: nothing to say about Hub, and the apps' check says
+            // what is wrong in its own words.
+            HubEvent::Checked(Err(_)) => false,
+            HubEvent::Staged(Ok(s)) => {
+                if !matches!(&self.own.status, Status::Ready(r) if r.version == s.version) {
+                    self.own.dismissed = false;
+                }
+                self.own.status = Status::Ready(s);
+                true
+            }
+            HubEvent::Staged(Err(e)) => {
+                self.own.status = Status::Failed(e);
+                true
+            }
+        }
+    }
+
+    /// Swaps the new Hub in and asks the shell to restart, or, with an install running, waits
+    /// for the installs to be done: Hub swaps itself last. False when nothing is ready.
+    fn hub_restart(&mut self) -> bool {
+        let Status::Ready(staged) = self.own.status.clone() else {
+            return false;
+        };
+        match selfupdate::apply_when_idle(&staged, self.installing()) {
+            Apply::Deferred => {
+                self.own.when_idle = true;
+                self.notice = Some("Hub restarts when the installs are done".to_string());
+            }
+            Apply::Swapped => {
+                self.own.when_idle = false;
+                self.own.restart = Some(staged.exe);
+                self.own.status = Status::None;
+            }
+            Apply::Failed(e) => {
+                self.own.when_idle = false;
+                self.own.status = Status::Failed(e);
+            }
+        }
+        true
+    }
+
+    /// The swap is done and the old Hub should end now and start the new one from this exe.
+    pub fn take_restart(&mut self) -> Option<PathBuf> {
+        self.own.restart.take()
+    }
+
+    /// Hub is ending (not restarting): a downloaded update is swapped in now, when no install
+    /// runs, so the next start is the new Hub. True when it was.
+    pub fn apply_hub_on_quit(&mut self) -> bool {
+        match self.own.status.clone() {
+            Status::Ready(s) if self.fixed.is_none() => {
+                selfupdate::apply_when_idle(&s, self.installing()) == Apply::Swapped
+            }
+            _ => false,
+        }
+    }
+
+    // ---- telling the user ----
+
+    /// What waits for an update, for the notification rule: Hub's own first, then the apps.
+    fn pending_set(&self) -> Vec<Pending> {
+        let mut v = Vec::new();
+        match &self.own.status {
+            Status::Available(o) => v.push(Pending::hub(&o.version.to_string())),
+            Status::Downloading(ver) => v.push(Pending::hub(&ver.to_string())),
+            Status::Ready(s) => v.push(Pending::hub(&s.version.to_string())),
+            Status::None | Status::Failed(_) => {}
+        }
+        for s in &self.slots {
+            if let Latest::Found(m) = &s.latest
+                && check::row_state(s.installed.as_ref(), &s.latest, s.skipped.as_deref())
+                    == Row::Update
+            {
+                v.push(Pending::app(s.app.name, &m.version.to_string()));
+            }
+        }
+        v
+    }
+
+    /// After a check: is there news the user was not told? Never when notifications are off or
+    /// there is no icon to tell it with (the memory is left alone then, so the news is told
+    /// later), and not when the user is looking at the window (it counts as told).
+    fn decide_message(&mut self) {
+        self.tell.msg = None;
+        if !self.tell.on || !self.tell.tray_up || self.fixed.is_some() {
+            return;
+        }
+        let before = self.tell.mem.to_line();
+        let msg = self.tell.mem.decide(&self.pending_set());
+        let line = self.tell.mem.to_line();
+        if line != before {
+            self.store.set_notified(&line);
+        }
+        if !self.tell.focused {
+            self.tell.msg = msg;
+        }
+    }
+
+    /// The balloon to show now, once: the shell takes it after each event.
+    pub fn take_message(&mut self) -> Option<Message> {
+        self.tell.msg.take()
+    }
+
+    /// The tray icon is up (or gone): only with one can anything be told.
+    pub fn set_tray_up(&mut self, up: bool) {
+        self.tell.tray_up = up;
+    }
+
+    /// The window is open and has the focus.
+    pub fn set_focused(&mut self, focused: bool) {
+        self.tell.focused = focused;
+    }
+
+    // ---- settings ----
+
+    pub fn notify_on(&self) -> bool {
+        self.tell.on
+    }
+
+    pub fn tray_on(&self) -> bool {
+        self.tray_on
+    }
+
+    pub fn interval_hours(&self) -> u32 {
+        self.interval
+    }
+
+    pub fn set_notify(&mut self, on: bool) {
+        self.tell.on = on;
+        if self.fixed.is_none() {
+            self.store.set_notify_enabled(on);
+        }
+    }
+
+    pub fn set_tray_enabled(&mut self, on: bool) {
+        self.tray_on = on;
+        if self.fixed.is_none() {
+            self.store.set_tray_enabled(on);
+        }
+    }
+
+    pub fn set_interval(&mut self, hours: u32) {
+        self.interval = hours;
+        if self.fixed.is_none() {
+            self.store.set_interval_hours(hours);
+        }
+    }
+
+    /// "Start with Windows" as the registry says (read the first time it is wanted).
+    pub fn autostart_on(&self) -> bool {
+        if let Some(b) = self.autostart.get() {
+            return b;
+        }
+        let on = !self.run_key.key.is_empty()
+            && hub_core::autostart::is_enabled_at(&self.run_key.key, &self.run_key.value);
+        self.autostart.set(Some(on));
+        on
+    }
+
+    /// Writes or removes the Run value. A refusal (an uninstalled copy, a registry error) leaves
+    /// the setting as the registry has it and says why in the status bar.
+    pub fn set_autostart(&mut self, on: bool) {
+        if self.fixed.is_some() {
+            return;
+        }
+        let (key, value) = (self.run_key.key.as_str(), self.run_key.value.as_str());
+        let r = if on {
+            match &self.run_key.exe {
+                Some(exe) => hub_core::autostart::enable_at(key, value, exe),
+                None => Err("this copy of Hub is not installed".to_string()),
+            }
+        } else {
+            hub_core::autostart::disable_at(key, value)
+        };
+        match r {
+            Ok(()) => {
+                self.autostart.set(Some(on));
+                self.store.set_autostart_enabled(on);
+            }
+            Err(e) => {
+                self.autostart.set(None);
+                self.notice = Some(format!("Could not change Start with Windows: {e}"));
+            }
+        }
+    }
+
+    fn settings_model(&self) -> crate::settings::Model {
+        let (hub_status, hub_button) = match (&self.own.exe, &self.own.status) {
+            (None, _) => (
+                "This copy was not installed, so it cannot update itself.".to_string(),
+                "Update Hub",
+            ),
+            (Some(_), s @ Status::Ready(_)) => (s.label(), "Restart now"),
+            (Some(_), Status::None) => (
+                if self.last_check.is_some() {
+                    "No update found at the last check".to_string()
+                } else {
+                    "Not checked yet".to_string()
+                },
+                "Update Hub",
+            ),
+            (Some(_), s) => (s.label(), "Update Hub"),
+        };
+        crate::settings::Model {
+            start: self.autostart_on(),
+            tray: self.tray_on,
+            notify: self.tell.on,
+            interval_hours: self.interval,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            hub_status,
+            hub_button,
+        }
+    }
+
+    /// The rows of the settings card now: the card is rebuilt from them whenever they differ from
+    /// what it shows, so a change made through the tray menu appears in it.
+    pub fn settings_rows(&self) -> Vec<SettingRow> {
+        crate::settings::rows(&self.settings_model())
+    }
+
+    /// A change made in the card: applied and saved. False for an id or a value that is not one.
+    pub fn change_setting(&mut self, id: u32, value: Value) -> bool {
+        use crate::settings::{INTERVAL, NOTIFY, START, TRAY, interval_hours};
+        match (id, value) {
+            (START, Value::Bool(on)) => self.set_autostart(on),
+            (TRAY, Value::Bool(on)) => self.set_tray_enabled(on),
+            (NOTIFY, Value::Bool(on)) => self.set_notify(on),
+            (INTERVAL, Value::Choice(i)) => match interval_hours(i) {
+                Some(h) => self.set_interval(h),
+                None => return false,
+            },
+            _ => return false,
+        }
+        true
+    }
+
+    /// A button of the card was pressed: "Update Hub" restarts into a downloaded update, or looks
+    /// for one (Hub's own manifest is the first request of any check).
+    pub fn setting_action(&mut self, id: u32) -> bool {
+        if id != crate::settings::UPDATE_HUB || self.fixed.is_some() {
+            return false;
+        }
+        if matches!(self.own.status, Status::Ready(_)) {
+            self.own.dismissed = false;
+            self.hub_restart()
+        } else {
+            self.start_check()
+        }
+    }
+
     // ---- events from the workers ----
 
     pub fn handle(&mut self, ev: Event) -> bool {
         let now = check::now();
         match ev {
             Event::Raise | Event::Tray(_) => false,
+            Event::Hub(h) => self.handle_hub(h),
             Event::Progress { id, p } => {
                 let phase = match p {
                     Progress::Downloading { done, total, .. } => Phase::Downloading {
@@ -1362,6 +1832,10 @@ impl Engine {
                     Err(e) => self.set_phase(id, Phase::Failed(fail_text(&e))),
                 }
                 self.pump();
+                // Hub swaps itself last: the installs are done, and it was asked to.
+                if self.own.when_idle && !self.installing() {
+                    self.hub_restart();
+                }
                 true
             }
             Event::Checked(results) => {
@@ -1379,6 +1853,7 @@ impl Engine {
                 self.last_check = Some(now);
                 self.failures = self.store.failures();
                 self.refresh_running_async();
+                self.decide_message();
                 true
             }
             Event::Running(list) => {

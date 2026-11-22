@@ -211,6 +211,8 @@ impl Fx {
                 poll: Duration::from_millis(10),
             },
             first_check: None,
+            hub_exe: None,
+            run_key: crate::glue::RunKey::none(),
         })
     }
 

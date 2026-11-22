@@ -84,6 +84,9 @@ pub fn render(vm: &Vm, pal: &Palette, w: u32, h: u32, scale: f32) -> Bitmap {
     let mut gfx = Gfx::new();
     let mut p = Painter::new(&mut bmp, &mut gfx, scale);
     view::draw(&mut p, pal, w as f32, h as f32, vm);
+    if let Some((rows, page)) = &vm.settings {
+        crate::settings::draw_card(&mut p, pal, w as f32, h as f32, rows.clone(), *page);
+    }
     bmp
 }
 

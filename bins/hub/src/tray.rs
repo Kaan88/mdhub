@@ -46,6 +46,9 @@ pub enum TrayCmd {
 pub struct Snapshot {
     /// How many apps have an update waiting: the badge, "Update all (N)".
     pub updates: u32,
+    /// Hub's own update is waiting (offered, downloading or ready): it counts in the badge and
+    /// the tooltip, not in "Update all".
+    pub hub_update: bool,
     /// Display names of those apps, for whoever composes the balloon.
     pub update_names: Vec<String>,
     /// Installed apps in catalog order: (id, display name).
@@ -54,6 +57,13 @@ pub struct Snapshot {
     pub start_with_windows: bool,
     /// "Notify about updates" is on.
     pub notify: bool,
+}
+
+impl Snapshot {
+    /// What the badge shows and the tooltip counts: the apps, and Hub itself.
+    pub fn badge(&self) -> u32 {
+        self.updates + u32::from(self.hub_update)
+    }
 }
 
 /// One line of the menu.
@@ -336,7 +346,7 @@ mod os {
     }
 
     fn current(c: &Ctx) -> (u32, String) {
-        let n = c.shared.inner.lock().map_or(0, |g| g.snap.updates);
+        let n = c.shared.inner.lock().map_or(0, |g| g.snap.badge());
         (n, tooltip(n, &c.shared.tip_suffix))
     }
 
@@ -687,6 +697,7 @@ mod tests {
     fn snap(updates: u32) -> Snapshot {
         Snapshot {
             updates,
+            hub_update: false,
             update_names: Vec::new(),
             apps: vec![("mdedit", "mdedit".into()), ("sprawl", "Sprawl".into())],
             start_with_windows: true,
