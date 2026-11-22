@@ -196,15 +196,28 @@ fn io_err(what: &str, e: std::io::Error) -> InstallError {
     InstallError::Io(format!("{what}: {e}"))
 }
 
-/// A plain file name: letters, digits, `.`, `_`, `-`; not `.` or `..`.
+/// A plain file name: letters, digits, `.`, `_`, `-`; not `.` or `..`, no trailing dot (Windows
+/// drops it, so `a.exe.` and `a.exe` are one file) and not a device name (`NUL`, `COM1.txt`, ...).
 fn plain_name(name: &str) -> bool {
     !name.is_empty()
         && name != "."
         && name != ".."
+        && !name.ends_with('.')
         && name.len() <= 128
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        && !device_name(name)
+}
+
+/// A name Windows treats as a device whatever its extension.
+fn device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ["COM", "LPT"].iter().any(|p| {
+            stem.strip_prefix(p)
+                .is_some_and(|d| d.len() == 1 && d.as_bytes()[0].is_ascii_digit() && d != "0")
+        })
 }
 
 /// A relative path with only normal components (no `..`, no drive, no root).
@@ -255,6 +268,20 @@ fn fetch_verified(
     let part = dir.join(format!("{}.part", spec.name));
     let done = dir.join(&spec.name);
     _ = selfupdate::remove_any(&part);
+    // A download kept from an earlier try is reused, but only when it still verifies.
+    if let Ok(md) = std::fs::metadata(&done)
+        && md.is_file()
+        && (spec.size == 0 || md.len() == spec.size)
+        && verify_sha256_file(&done, &spec.sha256).unwrap_or(false)
+    {
+        progress(Progress::Downloading {
+            file: spec.name.clone(),
+            done: md.len(),
+            total: md.len(),
+        });
+        progress(Progress::Verifying(spec.name.clone()));
+        return Ok(done);
+    }
     _ = selfupdate::remove_any(&done);
     progress(Progress::Downloading {
         file: spec.name.clone(),
@@ -318,6 +345,27 @@ fn fetch_verified(
         return Err(io_err("keeping the download", e));
     }
     Ok(done)
+}
+
+/// Copies a verified download beside its target and checks the copy again; `copy` is a parameter
+/// so a test can hand over a bad copy.
+fn stage(
+    spec: &FileSpec,
+    src: &Path,
+    staged: &Path,
+    copy: &dyn Fn(&Path, &Path) -> std::io::Result<()>,
+) -> Result<(), InstallError> {
+    copy(src, staged).map_err(|e| io_err(&format!("staging {}", spec.name), e))?;
+    if verify_sha256_file(staged, &spec.sha256).unwrap_or(false) {
+        Ok(())
+    } else {
+        Err(InstallError::Mismatch {
+            file: spec.name.clone(),
+            what: "sha256",
+            expected: spec.sha256.clone(),
+            received: "a different file after staging".to_string(),
+        })
+    }
 }
 
 /// Absolute paths of the executables that must be closed before `folder` is touched.
@@ -474,23 +522,9 @@ fn install_files(
         }
     };
     for ((spec, src), target) in entry.files.iter().zip(&cached).zip(&targets) {
-        let staged = selfupdate::staged(target);
-        let ok = std::fs::copy(src, &staged)
-            .map(|_| ())
-            .map_err(|e| io_err(&format!("staging {}", spec.name), e))
-            .and_then(|()| {
-                if verify_sha256_file(&staged, &spec.sha256).unwrap_or(false) {
-                    Ok(())
-                } else {
-                    Err(InstallError::Mismatch {
-                        file: spec.name.clone(),
-                        what: "sha256",
-                        expected: spec.sha256.clone(),
-                        received: "a different file after staging".to_string(),
-                    })
-                }
-            });
-        if let Err(e) = ok {
+        if let Err(e) = stage(spec, src, &selfupdate::staged(target), &|a, b| {
+            std::fs::copy(a, b).map(drop)
+        }) {
             unstage(&targets);
             return Err(e);
         }
@@ -517,10 +551,10 @@ fn install_files(
     // 5. Keep what was retired for a roll back (best effort: the install itself has succeeded).
     keep_for_rollback(app, store, cur, &folder, &exe, entry, &targets, &had);
 
+    // The files are in place: failing to write the note must not turn that into a failed install
+    // (the next check finds the app and offers the update again, which is harmless).
     let rec = make_record(&folder, &exe, &m.version.to_string(), "files", &m.date);
-    store
-        .save_installed(app.id, &rec)
-        .map_err(|e| io_err("recording the install", e))?;
+    _ = store.save_installed(app.id, &rec);
     Ok(Installed {
         folder,
         exe,
@@ -528,6 +562,25 @@ fn install_files(
         source: Source::Hub,
         kind: "files".to_string(),
     })
+}
+
+/// Size and modification time of a file, to see later whether it changed.
+fn fingerprint(p: &Path) -> Option<(u64, Option<std::time::SystemTime>)> {
+    let md = std::fs::metadata(p).ok()?;
+    Some((md.len(), md.modified().ok()))
+}
+
+/// Opens a file so that nothing can write to or delete it while the handle lives (Windows;
+/// elsewhere a plain read handle).
+fn lock_for_run(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut o = std::fs::OpenOptions::new();
+    o.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        o.share_mode(1); // FILE_SHARE_READ
+    }
+    o.open(path)
 }
 
 fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -549,6 +602,25 @@ fn keep_for_rollback(
     targets: &[PathBuf],
     had: &[bool],
 ) {
+    keep_for_rollback_with(
+        app, store, cur, folder, exe, entry, targets, had, &move_file,
+    );
+}
+
+/// `keep_for_rollback` with the move as a parameter. If any retired file cannot be kept, no
+/// roll back is offered at all: a note covering only some files would restore a mix.
+#[allow(clippy::too_many_arguments)]
+fn keep_for_rollback_with(
+    app: &CatalogApp,
+    store: &Store,
+    cur: Option<&Installed>,
+    folder: &Path,
+    exe: &Path,
+    entry: &PlatformEntry,
+    targets: &[PathBuf],
+    had: &[bool],
+    mv: &dyn Fn(&Path, &Path) -> std::io::Result<()>,
+) {
     let rb = store.rollback_dir(app.id);
     _ = selfupdate::remove_any(&rb);
     if !had.iter().any(|h| *h) {
@@ -566,8 +638,12 @@ fn keep_for_rollback(
     }
     for ((spec, target), had) in entry.files.iter().zip(targets).zip(had) {
         if *had {
-            if move_file(&selfupdate::retired(target), &rb.join(&spec.name)).is_ok() {
+            if mv(&selfupdate::retired(target), &rb.join(&spec.name)).is_ok() {
                 note.push_str(&format!("restore: {}\n", spec.name));
+            } else {
+                _ = selfupdate::remove_any(&rb);
+                selfupdate::clean_up(targets);
+                return;
             }
         } else {
             note.push_str(&format!("remove: {}\n", spec.name));
@@ -604,13 +680,30 @@ fn install_setup(
             return Err(InstallError::Cancelled);
         }
     }
+    // The cache is writable by any program of this user and the installer may run elevated:
+    // lock the file against writers first, then hash what is really there, and keep the lock
+    // until the installer has finished.
+    let lock = lock_for_run(&installer).map_err(|e| io_err("opening the installer", e))?;
+    if !verify_sha256_file(&installer, &setup.file.sha256).unwrap_or(false) {
+        drop(lock);
+        _ = selfupdate::remove_any(&installer);
+        return Err(InstallError::Mismatch {
+            file: setup.file.name.clone(),
+            what: "sha256",
+            expected: setup.file.sha256.clone(),
+            received: "a different file just before it was run".to_string(),
+        });
+    }
+    // What is there now, to tell afterwards whether the installer changed anything.
+    let before = cur.and_then(|c| fingerprint(&c.exe));
     progress(Progress::Placing);
     let dir = installer.parent().unwrap_or(cache).to_path_buf();
-    let code = match &opts.elevate {
+    let ran = match &opts.elevate {
         Elevation::Real => sys::run_setup(&installer, &setup.silent, &dir, setup.scope),
         Elevation::Custom(r) => r.run(&installer, &setup.silent, &dir, setup.scope),
-    }
-    .map_err(|reason| InstallError::Setup { code: None, reason })?;
+    };
+    drop(lock);
+    let code = ran.map_err(|reason| InstallError::Setup { code: None, reason })?;
     if code != 0 {
         return Err(InstallError::Setup {
             code: Some(code),
@@ -628,6 +721,25 @@ fn install_setup(
             app.name
         ),
     })?;
+    // An installer that exits 0 having done nothing (the app was open, an older copy was found)
+    // is not an update: do not record a version that is not there.
+    let unchanged = match &found.version {
+        Some(v) => *v < m.version,
+        None => {
+            before.is_some()
+                && cur.is_some_and(|c| c.exe == found.exe)
+                && before == fingerprint(&found.exe)
+        }
+    };
+    if unchanged {
+        return Err(InstallError::Setup {
+            code: Some(0),
+            reason: format!(
+                "the installer finished but {} is still the same version",
+                app.name
+            ),
+        });
+    }
     // An installer replaced the program: an older roll back note no longer describes it.
     _ = selfupdate::remove_any(&store.rollback_dir(app.id));
     let rec = make_record(
@@ -637,9 +749,7 @@ fn install_setup(
         "setup",
         &m.date,
     );
-    store
-        .save_installed(app.id, &rec)
-        .map_err(|e| io_err("recording the install", e))?;
+    _ = store.save_installed(app.id, &rec);
     Ok(Installed {
         version: Some(m.version.clone()),
         source: Source::Hub,
@@ -712,6 +822,13 @@ pub fn rollback_with(
 ) -> Result<Installed, InstallError> {
     let rb = store.rollback_dir(app.id);
     let note = read_note(&rb).ok_or(InstallError::NoRollback)?;
+    // The note must describe the install Hub has on record: a left over note, or one naming
+    // another folder, must not write old files over something newer or somewhere else.
+    if !note.folder.is_absolute()
+        || store.load_installed(app.id).map(|r| r.folder) != Some(note.folder.clone())
+    {
+        return Err(InstallError::NoRollback);
+    }
     let restore_targets: Vec<PathBuf> = note.restore.iter().map(|n| note.folder.join(n)).collect();
     for n in &note.restore {
         if !rb.join(n).is_file() {
@@ -797,7 +914,7 @@ mod sys {
         SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE,
+        EnumWindows, GetWindowThreadProcessId, PostMessageW, WM_CLOSE,
     };
 
     const DETACHED_PROCESS: u32 = 0x0000_0008;
@@ -824,36 +941,46 @@ mod sys {
         let ctx = unsafe { &*(lparam as *const Ctx) };
         // SAFETY: plain Win32 calls on a window handle EnumWindows gave us; results are checked.
         unsafe {
-            if IsWindowVisible(hwnd) == 0 {
-                return 1;
-            }
             let mut pid = 0u32;
             GetWindowThreadProcessId(hwnd, &mut pid);
             if pid == 0 {
                 return 1;
             }
-            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-            if h.is_null() {
-                return 1;
-            }
-            let mut buf = [0u16; 1024];
-            let mut len = buf.len() as u32;
-            let ok = QueryFullProcessImageNameW(h, 0, buf.as_mut_ptr(), &mut len);
-            CloseHandle(h);
-            if ok == 0 || len as usize > buf.len() {
-                return 1;
-            }
-            let path = String::from_utf16_lossy(&buf[..len as usize])
-                .replace('/', "\\")
-                .to_lowercase();
-            if ctx.exes.contains(&path) {
+            if image_path(pid).is_some_and(|p| ctx.exes.contains(&p)) {
                 PostMessageW(hwnd, WM_CLOSE, 0, 0);
             }
         }
         1
     }
 
-    /// `WM_CLOSE` to every visible top-level window of a process whose image is one of `exes`.
+    /// The normalised (lower case, backslashes) image path of a process, however long it is.
+    pub fn image_path(pid: u32) -> Option<String> {
+        // SAFETY: plain Win32 calls; the handle is closed before returning and the buffer is
+        // only read up to the length the system reports.
+        unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if h.is_null() {
+                return None;
+            }
+            let mut size = 512usize;
+            let found = loop {
+                let mut buf = vec![0u16; size];
+                let mut len = buf.len() as u32;
+                if QueryFullProcessImageNameW(h, 0, buf.as_mut_ptr(), &mut len) != 0 {
+                    break Some(String::from_utf16_lossy(&buf[..(len as usize).min(size)]));
+                }
+                if size >= 32768 {
+                    break None;
+                }
+                size *= 4;
+            };
+            CloseHandle(h);
+            found.map(|s| s.replace('/', "\\").to_lowercase())
+        }
+    }
+
+    /// `WM_CLOSE` to every top-level window (visible or hidden, like a tray program's) of a
+    /// process whose image is one of `exes`. A process with no window at all cannot be asked.
     pub fn post_close(exes: &[PathBuf]) {
         let ctx = Ctx {
             exes: exes.iter().map(|p| norm(p)).collect(),
@@ -1530,13 +1657,48 @@ mod tests {
         running: AtomicBool,
         closes_after_ask: bool,
         asks: AtomicUsize,
+        /// Every list of executables it was asked about.
+        seen: Mutex<Vec<Vec<PathBuf>>>,
+        /// Raised on the first ask (a user pressing Cancel while the app closes).
+        cancel_on_ask: Option<Arc<AtomicBool>>,
+        /// Run on the first ask (something else touching the disk meanwhile).
+        on_ask: Option<Box<dyn Fn() + Send + Sync>>,
+    }
+    impl FakeCloser {
+        fn new(running: bool, closes_after_ask: bool) -> FakeCloser {
+            FakeCloser {
+                running: AtomicBool::new(running),
+                closes_after_ask,
+                asks: AtomicUsize::new(0),
+                seen: Mutex::new(Vec::new()),
+                cancel_on_ask: None,
+                on_ask: None,
+            }
+        }
+        fn exes(&self) -> Vec<PathBuf> {
+            self.seen
+                .lock()
+                .unwrap()
+                .iter()
+                .flatten()
+                .cloned()
+                .collect()
+        }
     }
     impl Closer for FakeCloser {
-        fn is_running(&self, _: &[PathBuf]) -> bool {
+        fn is_running(&self, exes: &[PathBuf]) -> bool {
+            self.seen.lock().unwrap().push(exes.to_vec());
             self.running.load(Ordering::Relaxed)
         }
         fn ask_close(&self, _: &[PathBuf]) {
-            self.asks.fetch_add(1, Ordering::Relaxed);
+            if self.asks.fetch_add(1, Ordering::Relaxed) == 0 {
+                if let Some(c) = &self.cancel_on_ask {
+                    c.store(true, Ordering::Relaxed);
+                }
+                if let Some(f) = &self.on_ask {
+                    f();
+                }
+            }
             if self.closes_after_ask {
                 self.running.store(false, Ordering::Relaxed);
             }
@@ -1548,11 +1710,7 @@ mod tests {
         let rig = Rig::new("stuck");
         std::fs::create_dir_all(rig.folder()).unwrap();
         std::fs::write(rig.folder().join("fake.exe"), b"exe v1").unwrap();
-        let closer = Arc::new(FakeCloser {
-            running: AtomicBool::new(true),
-            closes_after_ask: false,
-            asks: AtomicUsize::new(0),
-        });
+        let closer = Arc::new(FakeCloser::new(true, false));
         let mut opts = rig.opts();
         opts.closer = closer.clone();
         let t = transport(&[("fake.exe", b"exe v2")]);
@@ -1575,11 +1733,7 @@ mod tests {
         let rig = Rig::new("closes");
         std::fs::create_dir_all(rig.folder()).unwrap();
         std::fs::write(rig.folder().join("fake.exe"), b"exe v1").unwrap();
-        let closer = Arc::new(FakeCloser {
-            running: AtomicBool::new(true),
-            closes_after_ask: true,
-            asks: AtomicUsize::new(0),
-        });
+        let closer = Arc::new(FakeCloser::new(true, true));
         let mut opts = rig.opts();
         opts.closer = closer.clone();
         let t = transport(&[("fake.exe", b"exe v2")]);
@@ -1709,6 +1863,639 @@ mod tests {
             let args: Vec<String> = std::env::args().collect();
             _ = std::fs::write(path, format!("{}\n{}\n", cwd.display(), args.join(" ")));
         }
+    }
+
+    // ---- review fixes ----
+
+    fn put(rig: &Rig, name: &str, bytes: &[u8]) {
+        std::fs::create_dir_all(rig.folder()).unwrap();
+        std::fs::write(rig.folder().join(name), bytes).unwrap();
+    }
+    fn setup_opts(rig: &Rig, runner: Arc<dyn SetupRunner>) -> Opts {
+        let mut opts = rig.opts();
+        opts.elevate = Elevation::Custom(runner);
+        let folder = rig.folder();
+        opts.redetect = Some(Arc::new(move |_, _| {
+            let exe = folder.join("fake.exe");
+            exe.is_file().then(|| Installed {
+                folder: folder.clone(),
+                exe,
+                version: None,
+                source: Source::Folder,
+                kind: String::new(),
+            })
+        }));
+        opts
+    }
+    fn runner(code: u32, make: Option<PathBuf>) -> Arc<FakeRunner> {
+        Arc::new(FakeRunner {
+            code,
+            seen: Mutex::new(vec![]),
+            make,
+        })
+    }
+
+    struct ErrRunner;
+    impl SetupRunner for ErrRunner {
+        fn run(&self, _: &Path, _: &str, _: &Path, _: Scope) -> Result<u32, String> {
+            Err("declined".to_string())
+        }
+    }
+
+    #[test]
+    fn device_and_dotted_names_are_not_plain() {
+        for bad in [
+            "fake.exe.",
+            "NUL",
+            "nul.txt",
+            "COM1",
+            "lpt9.exe",
+            "con",
+            "AUX.x",
+            "prn.exe",
+        ] {
+            assert!(!plain_name(bad), "{bad:?}");
+        }
+        for good in ["fake.exe", "com0.exe", "console.exe", "COMX", "a-b_c.1.exe"] {
+            assert!(plain_name(good), "{good:?}");
+        }
+        let rig = Rig::new("devnames");
+        let t = transport(&[("fake.exe", b"a"), ("fake.exe.", b"b")]);
+        let mut e = entry(Kind::Files);
+        e.files = vec![spec("fake.exe", b"a"), spec("fake.exe.", b"b")];
+        let (r, _) = run(&rig, &manifest("2.0.0", e), None, &t, &rig.opts());
+        assert!(matches!(r, Err(InstallError::Invalid(_))), "{r:?}");
+        assert!(t.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_file_listed_twice_in_any_case_is_refused_before_any_download() {
+        let rig = Rig::new("dup");
+        let t = transport(&[("fake.exe", b"a"), ("FAKE.EXE", b"b")]);
+        let mut e = entry(Kind::Files);
+        e.files = vec![spec("fake.exe", b"a"), spec("FAKE.EXE", b"b")];
+        let (r, _) = run(&rig, &manifest("2.0.0", e), None, &t, &rig.opts());
+        assert!(
+            matches!(&r, Err(InstallError::Invalid(s)) if s.contains("twice")),
+            "{r:?}"
+        );
+        assert!(t.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_exe_path_that_climbs_out_is_refused_even_when_the_file_exists() {
+        let rig = Rig::new("exe-climb");
+        std::fs::write(rig.root.join("x.exe"), b"x").unwrap();
+        let t = transport(&[("fake.exe", b"x")]);
+        let mut e = entry(Kind::Files);
+        e.files = vec![spec("fake.exe", b"x")];
+        e.exe = Some("..\\..\\x.exe".into());
+        let (r, _) = run(&rig, &manifest("2.0.0", e), None, &t, &rig.opts());
+        assert!(
+            matches!(&r, Err(InstallError::Invalid(s)) if s.contains("not relative")),
+            "{r:?}"
+        );
+        assert!(t.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_release_with_no_files_says_so() {
+        let rig = Rig::new("nofiles");
+        let t = transport(&[]);
+        let (r, _) = run(
+            &rig,
+            &manifest("2.0.0", entry(Kind::Files)),
+            None,
+            &t,
+            &rig.opts(),
+        );
+        assert!(
+            matches!(&r, Err(InstallError::Invalid(s)) if s.contains("lists no files")),
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn a_setup_file_name_with_a_separator_is_refused_and_nothing_runs() {
+        let rig = Rig::new("setup-name");
+        let r = runner(0, None);
+        let opts = setup_opts(&rig, r.clone());
+        let mut e = entry(Kind::Setup);
+        e.setup = Some(SetupSpec {
+            file: spec("..\\s.exe", b"s"),
+            silent: "/S".into(),
+            scope: Scope::User,
+        });
+        let t = transport(&[("..\\s.exe", b"s")]);
+        let (res, _) = run(&rig, &manifest("3.0.0", e), None, &t, &opts);
+        assert!(matches!(res, Err(InstallError::Invalid(_))), "{res:?}");
+        assert!(t.calls.lock().unwrap().is_empty());
+        assert!(r.seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_installer_that_could_not_be_started_is_a_setup_error_without_a_code() {
+        let rig = Rig::new("setup-err");
+        let mut opts = rig.opts();
+        opts.elevate = Elevation::Custom(Arc::new(ErrRunner));
+        let (m, t) = setup_manifest(Scope::Machine);
+        let (r, _) = run(&rig, &m, None, &t, &opts);
+        match r {
+            Err(InstallError::Setup { code: None, reason }) => assert!(reason.contains("declined")),
+            other => panic!("{other:?}"),
+        }
+        assert!(rig.store.load_installed("fake").is_none());
+    }
+
+    #[test]
+    fn the_close_list_has_the_exe_the_engines_and_the_entrys_own_list() {
+        let rig = Rig::new("closelist");
+        put(&rig, "fake.exe", b"exe v1");
+        let closer = Arc::new(FakeCloser::new(true, true));
+        let mut opts = rig.opts();
+        opts.closer = closer.clone();
+        let t = transport(&[("fake.exe", b"exe v2")]);
+        let mut e = entry(Kind::Files);
+        e.files = vec![spec("fake.exe", b"exe v2")];
+        e.wait = vec!["extra.exe".into()];
+        let cur = rig.current();
+        run(&rig, &manifest("2.0.0", e), Some(&cur), &t, &opts)
+            .0
+            .unwrap();
+        let seen = closer.exes();
+        for want in ["fake.exe", "fake-engine.exe", "extra.exe"] {
+            assert!(
+                seen.contains(&rig.folder().join(want)),
+                "{want} in {seen:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_setup_does_not_run_over_an_app_that_will_not_close() {
+        let rig = Rig::new("setup-stuck");
+        put(&rig, "fake.exe", b"old");
+        let r = runner(0, None);
+        let mut opts = setup_opts(&rig, r.clone());
+        opts.closer = Arc::new(FakeCloser::new(true, false));
+        let (m, t) = setup_manifest(Scope::User);
+        let cur = rig.current();
+        let (res, seen) = run(&rig, &m, Some(&cur), &t, &opts);
+        assert_eq!(res, Err(InstallError::Running("fake.exe".into())));
+        assert!(r.seen.lock().unwrap().is_empty(), "the installer never ran");
+        assert!(!seen.contains(&Progress::Placing));
+        assert_eq!(read(&rig.folder().join("fake.exe")), b"old");
+    }
+
+    #[test]
+    fn roll_back_waits_for_the_app_and_stops_when_it_will_not_close() {
+        let rig = Rig::new("rollback-stuck");
+        put(&rig, "fake.exe", b"exe v1");
+        let t = transport(&[("fake.exe", b"exe v2")]);
+        let m = files_manifest("2.0.0", &[("fake.exe", b"exe v2")]);
+        let cur = rig.current();
+        run(&rig, &m, Some(&cur), &t, &rig.opts()).0.unwrap();
+        let closer = Arc::new(FakeCloser::new(true, false));
+        let mut opts = rig.opts();
+        opts.closer = closer.clone();
+        let r = rollback_with(&APP, &rig.store, &opts, &mut |_| {});
+        assert_eq!(r, Err(InstallError::Running("fake.exe".into())));
+        assert!(closer.asks.load(Ordering::Relaxed) >= 1);
+        assert_eq!(read(&rig.folder().join("fake.exe")), b"exe v2");
+        assert_eq!(names(&rig.folder()), ["fake.exe"]);
+        assert!(rig.store.rollback_dir("fake").join(ROLLBACK_NOTE).is_file());
+        assert!(
+            closer
+                .exes()
+                .contains(&rig.folder().join("fake-engine.exe"))
+        );
+    }
+
+    fn cancel_run(
+        rig: &Rig,
+        m: &HubManifest,
+        cur: Option<&Installed>,
+        t: &FakeTransport,
+        opts: &Opts,
+        at: Progress,
+    ) -> Result<Installed, InstallError> {
+        let flag = opts.cancel.clone();
+        install(&APP, m, cur, &rig.store, t, opts, &mut |p| {
+            if p == at {
+                flag.store(true, Ordering::Relaxed);
+            }
+        })
+    }
+
+    #[test]
+    fn cancel_after_the_last_download_places_nothing() {
+        let rig = Rig::new("cancel-after-dl");
+        put(&rig, "fake.exe", b"exe v1");
+        let t = transport(&[("fake.exe", b"exe v2")]);
+        let m = files_manifest("2.0.0", &[("fake.exe", b"exe v2")]);
+        let cur = rig.current();
+        let closer = Arc::new(FakeCloser::new(false, false));
+        let mut opts = rig.opts();
+        opts.closer = closer.clone();
+        let r = cancel_run(
+            &rig,
+            &m,
+            Some(&cur),
+            &t,
+            &opts,
+            Progress::Verifying("fake.exe".into()),
+        );
+        assert_eq!(r, Err(InstallError::Cancelled));
+        assert!(
+            closer.exes().is_empty(),
+            "stopped before any staging or closing"
+        );
+        assert_eq!(read(&rig.folder().join("fake.exe")), b"exe v1");
+        assert_eq!(names(&rig.folder()), ["fake.exe"]);
+    }
+
+    #[test]
+    fn cancel_while_the_app_closes_stops_at_once_not_after_the_timeout() {
+        let rig = Rig::new("cancel-in-wait");
+        put(&rig, "fake.exe", b"exe v1");
+        let mut opts = rig.opts();
+        let mut closer = FakeCloser::new(true, false);
+        closer.cancel_on_ask = Some(opts.cancel.clone());
+        opts.closer = Arc::new(closer);
+        let t = transport(&[("fake.exe", b"exe v2")]);
+        let m = files_manifest("2.0.0", &[("fake.exe", b"exe v2")]);
+        let cur = rig.current();
+        let (r, _) = run(&rig, &m, Some(&cur), &t, &opts);
+        assert_eq!(
+            r,
+            Err(InstallError::Cancelled),
+            "not Running after the timeout"
+        );
+        assert_eq!(names(&rig.folder()), ["fake.exe"]);
+    }
+
+    #[test]
+    fn cancel_just_after_the_app_closed_places_nothing() {
+        let rig = Rig::new("cancel-after-close");
+        put(&rig, "fake.exe", b"exe v1");
+        let mut opts = rig.opts();
+        let mut closer = FakeCloser::new(true, true);
+        closer.cancel_on_ask = Some(opts.cancel.clone());
+        opts.closer = Arc::new(closer);
+        let t = transport(&[("fake.exe", b"exe v2")]);
+        let m = files_manifest("2.0.0", &[("fake.exe", b"exe v2")]);
+        let cur = rig.current();
+        let (r, seen) = run(&rig, &m, Some(&cur), &t, &opts);
+        assert_eq!(r, Err(InstallError::Cancelled));
+        assert!(!seen.contains(&Progress::Placing));
+        assert_eq!(read(&rig.folder().join("fake.exe")), b"exe v1");
+        assert_eq!(names(&rig.folder()), ["fake.exe"], "staged copies removed");
+    }
+
+    #[test]
+    fn cancel_after_the_installer_download_never_runs_it() {
+        let rig = Rig::new("cancel-setup");
+        let r = runner(0, None);
+        let opts = setup_opts(&rig, r.clone());
+        let (m, t) = setup_manifest(Scope::User);
+        let res = cancel_run(
+            &rig,
+            &m,
+            None,
+            &t,
+            &opts,
+            Progress::Verifying("fake-setup.exe".into()),
+        );
+        assert_eq!(res, Err(InstallError::Cancelled));
+        assert!(r.seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_bad_copy_after_staging_is_caught_before_anything_is_swapped() {
+        let rig = Rig::new("stage");
+        let src = rig.root.join("src.bin");
+        std::fs::write(&src, b"good").unwrap();
+        let staged = rig.root.join("t.exe.new");
+        let s = spec("t.exe", b"good");
+        let bad = stage(&s, &src, &staged, &|_, to| std::fs::write(to, b"evil"));
+        assert!(
+            matches!(&bad, Err(InstallError::Mismatch { received, .. }) if received.contains("staging")),
+            "{bad:?}"
+        );
+        let good = stage(&s, &src, &staged, &|a, b| std::fs::copy(a, b).map(drop));
+        assert_eq!(good, Ok(()));
+    }
+
+    #[test]
+    fn a_setup_install_clears_an_older_roll_back() {
+        let rig = Rig::new("setup-clears-rb");
+        put(&rig, "fake.exe", b"exe v1");
+        let t = transport(&[("fake.exe", b"exe v2")]);
+        let m = files_manifest("2.0.0", &[("fake.exe", b"exe v2")]);
+        let cur = rig.current();
+        run(&rig, &m, Some(&cur), &t, &rig.opts()).0.unwrap();
+        assert!(rig.store.rollback_dir("fake").exists());
+        let opts = setup_opts(&rig, runner(0, Some(rig.folder())));
+        let (m3, t3) = setup_manifest(Scope::User);
+        run(&rig, &m3, Some(&cur), &t3, &opts).0.unwrap();
+        assert!(!rig.store.rollback_dir("fake").exists());
+    }
+
+    #[test]
+    fn a_second_update_replaces_the_roll_back_instead_of_adding_to_it() {
+        let rig = Rig::new("rb-replaced");
+        put(&rig, "fake.exe", b"exe v1");
+        put(&rig, "fake-engine.exe", b"engine v1");
+        let cur = rig.current();
+        let t2 = transport(&[("fake.exe", b"exe v2"), ("fake-engine.exe", b"engine v2")]);
+        let m2 = files_manifest(
+            "2.0.0",
+            &[("fake.exe", b"exe v2"), ("fake-engine.exe", b"engine v2")],
+        );
+        run(&rig, &m2, Some(&cur), &t2, &rig.opts()).0.unwrap();
+        let rb = rig.store.rollback_dir("fake");
+        assert_eq!(names(&rb), ["fake-engine.exe", "fake.exe", ROLLBACK_NOTE]);
+        let t3 = transport(&[("fake.exe", b"exe v3")]);
+        let m3 = files_manifest("3.0.0", &[("fake.exe", b"exe v3")]);
+        run(&rig, &m3, Some(&cur), &t3, &rig.opts()).0.unwrap();
+        assert_eq!(names(&rb), ["fake.exe", ROLLBACK_NOTE]);
+        assert_eq!(read(&rb.join("fake.exe")), b"exe v2");
+    }
+
+    #[test]
+    fn when_a_retired_file_cannot_be_kept_no_roll_back_is_offered() {
+        let rig = Rig::new("rb-partial");
+        put(&rig, "fake.exe", b"exe v2");
+        put(&rig, "fake-engine.exe", b"engine v2");
+        put(&rig, "fake.exe.old", b"exe v1");
+        put(&rig, "fake-engine.exe.old", b"engine v1");
+        let mut e = entry(Kind::Files);
+        e.files = vec![spec("fake.exe", b"x"), spec("fake-engine.exe", b"y")];
+        let targets = vec![
+            rig.folder().join("fake.exe"),
+            rig.folder().join("fake-engine.exe"),
+        ];
+        keep_for_rollback_with(
+            &APP,
+            &rig.store,
+            None,
+            &rig.folder(),
+            &rig.folder().join("fake.exe"),
+            &e,
+            &targets,
+            &[true, true],
+            &|from, to| {
+                if to.ends_with("fake-engine.exe") {
+                    Err(std::io::Error::other("locked"))
+                } else {
+                    move_file(from, to)
+                }
+            },
+        );
+        assert!(
+            !rig.store.rollback_dir("fake").exists(),
+            "no half a roll back"
+        );
+        assert_eq!(names(&rig.folder()), ["fake-engine.exe", "fake.exe"]);
+    }
+
+    /// A roll back note for `fake` with a plain restore file planted, and a record for a folder.
+    fn note_rig(rig: &Rig, note: &str, record_folder: &Path) -> PathBuf {
+        let rb = rig.store.rollback_dir("fake");
+        std::fs::create_dir_all(&rb).unwrap();
+        std::fs::write(rb.join("fake.exe"), b"exe v1").unwrap();
+        std::fs::write(rb.parent().unwrap().join("evil.exe"), b"evil").unwrap();
+        std::fs::write(rb.join(ROLLBACK_NOTE), note).unwrap();
+        let rec = make_record(
+            record_folder,
+            &record_folder.join("fake.exe"),
+            "1.0.0",
+            "files",
+            "",
+        );
+        _ = rig.store.save_installed("fake", &rec);
+        rb
+    }
+
+    #[test]
+    fn a_note_that_is_unsafe_or_does_not_match_the_record_is_never_followed() {
+        let rig = Rig::new("note-checks");
+        let f = rig.folder();
+        std::fs::create_dir_all(&f).unwrap();
+        let other = rig.root.join("Elsewhere");
+        std::fs::create_dir_all(&other).unwrap();
+        let ok = |header: &str, folder: &Path, restore: &str| {
+            format!(
+                "{header}\nfolder: {0}\nexe: {0}\\fake.exe\nrestore: {restore}\n",
+                folder.display()
+            )
+        };
+        let cases = [
+            // The name climbs out of the roll back folder to a file that exists.
+            ok("hub-rollback: 1", &f, "..\\evil.exe"),
+            // A note of a version this Hub does not know, otherwise valid.
+            ok("hub-rollback: 2", &f, "fake.exe"),
+            // A folder the record does not name.
+            ok("hub-rollback: 1", &other, "fake.exe"),
+        ];
+        for note in cases {
+            let rb = note_rig(&rig, &note, &f);
+            assert_eq!(
+                rollback(&APP, &rig.store),
+                Err(InstallError::NoRollback),
+                "{note}"
+            );
+            assert!(!f.join("fake.exe").exists() && !other.join("fake.exe").exists());
+            assert!(rb.join(ROLLBACK_NOTE).is_file(), "the note is left alone");
+        }
+        // A relative folder, even when the record says the same.
+        let note = "hub-rollback: 1\nfolder: rel\nexe: rel\\fake.exe\nrestore: fake.exe\n";
+        note_rig(&rig, note, Path::new("rel"));
+        assert_eq!(rollback(&APP, &rig.store), Err(InstallError::NoRollback));
+        // A valid note and no record at all.
+        let good = ok("hub-rollback: 1", &f, "fake.exe");
+        let rb = note_rig(&rig, &good, &f);
+        _ = std::fs::remove_dir_all(rig.store.dir.join("installed.ini"));
+        _ = std::fs::remove_file(rig.store.dir.join("installed.ini"));
+        _ = std::fs::remove_file(rig.store.dir.join("inst-fake.txt"));
+        assert_eq!(rollback(&APP, &rig.store), Err(InstallError::NoRollback));
+        assert!(rb.join(ROLLBACK_NOTE).is_file());
+    }
+
+    #[test]
+    fn a_kept_download_is_reused_on_retry_unless_it_no_longer_verifies() {
+        let rig = Rig::new("reuse");
+        put(&rig, "fake.exe", b"exe v1");
+        let t = transport(&[("fake.exe", b"exe v2")]);
+        let m = files_manifest("2.0.0", &[("fake.exe", b"exe v2")]);
+        let cur = rig.current();
+        let mut stuck = rig.opts();
+        stuck.closer = Arc::new(FakeCloser::new(true, false));
+        assert!(matches!(
+            run(&rig, &m, Some(&cur), &t, &stuck).0,
+            Err(InstallError::Running(_))
+        ));
+        assert_eq!(t.calls.lock().unwrap().len(), 1);
+        run(&rig, &m, Some(&cur), &t, &rig.opts()).0.unwrap();
+        assert_eq!(t.calls.lock().unwrap().len(), 1, "the kept file was reused");
+        assert_eq!(read(&rig.folder().join("fake.exe")), b"exe v2");
+
+        // A kept file that was changed meanwhile is fetched again.
+        std::fs::write(rig.folder().join("fake.exe"), b"exe v1").unwrap();
+        assert!(matches!(
+            run(&rig, &m, Some(&cur), &t, &stuck).0,
+            Err(InstallError::Running(_))
+        ));
+        let kept = rig.cache("2.0.0").join("fake.exe");
+        std::fs::write(&kept, b"exe vX").unwrap();
+        let n = t.calls.lock().unwrap().len();
+        run(&rig, &m, Some(&cur), &t, &rig.opts()).0.unwrap();
+        assert_eq!(t.calls.lock().unwrap().len(), n + 1);
+        assert_eq!(read(&rig.folder().join("fake.exe")), b"exe v2");
+    }
+
+    #[test]
+    fn an_installer_swapped_after_the_download_is_never_run() {
+        let rig = Rig::new("setup-swapped");
+        put(&rig, "fake.exe", b"old");
+        let r = runner(0, None);
+        let mut opts = setup_opts(&rig, r.clone());
+        let cached = rig.cache("3.0.0").join("fake-setup.exe");
+        let mut closer = FakeCloser::new(true, true);
+        closer.on_ask = Some(Box::new(move || {
+            std::fs::write(&cached, b"evil bytes").unwrap();
+        }));
+        opts.closer = Arc::new(closer);
+        let (m, t) = setup_manifest(Scope::Machine);
+        let cur = rig.current();
+        let (res, seen) = run(&rig, &m, Some(&cur), &t, &opts);
+        assert!(
+            matches!(res, Err(InstallError::Mismatch { what: "sha256", .. })),
+            "{res:?}"
+        );
+        assert!(
+            r.seen.lock().unwrap().is_empty(),
+            "the swapped file never ran"
+        );
+        assert!(!seen.contains(&Progress::Placing));
+    }
+
+    /// Tries to write to the installer while it is "running".
+    struct WriteProbe(Mutex<Option<bool>>);
+    impl SetupRunner for WriteProbe {
+        fn run(&self, exe: &Path, _: &str, _: &Path, _: Scope) -> Result<u32, String> {
+            let denied = std::fs::OpenOptions::new().write(true).open(exe).is_err();
+            *self.0.lock().unwrap() = Some(denied);
+            Ok(0)
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn the_installer_cannot_be_written_while_it_runs() {
+        let rig = Rig::new("setup-locked");
+        let probe = Arc::new(WriteProbe(Mutex::new(None)));
+        let mut opts = rig.opts();
+        opts.elevate = Elevation::Custom(probe.clone());
+        opts.redetect = Some(Arc::new(|_, _| None));
+        let (m, t) = setup_manifest(Scope::Machine);
+        let _ = run(&rig, &m, None, &t, &opts);
+        assert_eq!(*probe.0.lock().unwrap(), Some(true));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_locked_program_can_still_be_started() {
+        let rig = Rig::new("locked-runs");
+        let exe = rig.root.join("s.exe");
+        std::fs::copy(std::env::current_exe().unwrap(), &exe).unwrap();
+        let lock = lock_for_run(&exe).unwrap();
+        let code = sys::run_setup(&exe, "--list", &rig.root, Scope::User);
+        drop(lock);
+        assert_eq!(code, Ok(0));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn the_image_path_of_this_process_is_found() {
+        let want = std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .replace('/', "\\")
+            .to_lowercase();
+        assert_eq!(sys::image_path(std::process::id()), Some(want));
+    }
+
+    fn seed_record(rig: &Rig) -> Record {
+        let rec = make_record(
+            &rig.folder(),
+            &rig.folder().join("fake.exe"),
+            "1.0.0",
+            "setup",
+            "x",
+        );
+        _ = rig.store.save_installed("fake", &rec);
+        rec
+    }
+
+    #[test]
+    fn a_setup_that_did_nothing_is_not_recorded_as_the_new_version() {
+        let rig = Rig::new("setup-noop");
+        put(&rig, "fake.exe", b"old");
+        let rec = seed_record(&rig);
+        let cur = rig.current();
+        let folder = rig.folder();
+        // The program is found and still reports the old version.
+        let mut opts = rig.opts();
+        opts.elevate = Elevation::Custom(runner(0, None));
+        let f2 = folder.clone();
+        opts.redetect = Some(Arc::new(move |_, _| {
+            Some(Installed {
+                folder: f2.clone(),
+                exe: f2.join("fake.exe"),
+                version: Some(Version::parse("1.0.0").unwrap()),
+                source: Source::Folder,
+                kind: String::new(),
+            })
+        }));
+        let (m, t) = setup_manifest(Scope::User);
+        let (r, _) = run(&rig, &m, Some(&cur), &t, &opts);
+        assert!(
+            matches!(r, Err(InstallError::Setup { code: Some(0), .. })),
+            "{r:?}"
+        );
+        assert_eq!(rig.store.load_installed("fake"), Some(rec.clone()));
+
+        // No version to compare: the same program, byte for byte, is just as unchanged.
+        let opts = setup_opts(&rig, runner(0, None));
+        let (r, _) = run(&rig, &m, Some(&cur), &t, &opts);
+        assert!(
+            matches!(r, Err(InstallError::Setup { code: Some(0), .. })),
+            "{r:?}"
+        );
+        assert_eq!(rig.store.load_installed("fake"), Some(rec));
+
+        // A program that changed is an update.
+        let opts = setup_opts(&rig, runner(0, Some(folder)));
+        let (r, _) = run(&rig, &m, Some(&cur), &t, &opts);
+        assert_eq!(r.unwrap().version, Some(Version::parse("3.0.0").unwrap()));
+    }
+
+    #[test]
+    fn failing_to_write_the_record_does_not_fail_an_install_that_placed_the_files() {
+        let rig = Rig::new("record-fails");
+        // Whatever the store writes its record to, make it a folder.
+        for name in ["installed.ini", "inst-fake.txt"] {
+            std::fs::create_dir_all(rig.store.dir.join(name)).unwrap();
+        }
+        put(&rig, "fake.exe", b"exe v1");
+        let t = transport(&[("fake.exe", b"exe v2")]);
+        let m = files_manifest("2.0.0", &[("fake.exe", b"exe v2")]);
+        let cur = rig.current();
+        let (r, seen) = run(&rig, &m, Some(&cur), &t, &rig.opts());
+        assert_eq!(r.unwrap().version, Some(Version::parse("2.0.0").unwrap()));
+        assert_eq!(read(&rig.folder().join("fake.exe")), b"exe v2");
+        assert_eq!(seen.last(), Some(&Progress::Finished));
     }
 
     #[test]
