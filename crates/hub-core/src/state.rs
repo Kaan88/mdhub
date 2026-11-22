@@ -536,8 +536,9 @@ impl Lock {
                         .ok()
                         .and_then(|t| t.elapsed().ok())
                         .is_some_and(|age| age > std::time::Duration::from_secs(10));
-                    if stale {
-                        let _ = std::fs::remove_file(&p);
+                    // Only a lock that really went is tried again at once: one that cannot be
+                    // removed would otherwise spin here for ever, with no sleep and no way out.
+                    if stale && std::fs::remove_file(&p).is_ok() {
                         continue;
                     }
                 }
@@ -583,6 +584,36 @@ mod tests {
             kind: "setup".into(),
             date: "2026-11-22".into(),
         }
+    }
+
+    /// A crashed holder's lock that cannot be removed (another program, a scanner, has the file
+    /// open without sharing deletion) must not turn a bookkeeping write into a busy loop that
+    /// never ends: the write goes on without the lock after the usual wait.
+    #[cfg(windows)]
+    #[test]
+    fn a_stale_lock_that_cannot_be_removed_does_not_hang_a_write() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::time::{Duration, SystemTime};
+        let dir = scratch("stuck-lock");
+        std::fs::create_dir_all(&dir).unwrap();
+        let held = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .share_mode(1) // FILE_SHARE_READ: nobody may delete it while this handle lives
+            .open(dir.join(".hub.lock"))
+            .unwrap();
+        held.set_modified(SystemTime::now() - Duration::from_secs(60))
+            .unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let s = Store::at(&dir);
+        std::thread::spawn(move || {
+            s.set_view(ViewMode::Large);
+            let _ = tx.send(s.view());
+        });
+        let got = rx.recv_timeout(Duration::from_secs(20));
+        assert_eq!(got.ok(), Some(ViewMode::Large), "the write never returned");
+        drop(held);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
