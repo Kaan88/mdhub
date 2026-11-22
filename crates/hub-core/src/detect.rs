@@ -81,10 +81,13 @@ pub fn detect(app: &CatalogApp, store: &Store, env: &Env) -> Option<Installed> {
     if let Some(r) = store.load_installed(app.id)
         && r.exe.is_file()
     {
+        // The exe's own version resource wins: mdedit and mdview update themselves, and
+        // Hub's record (or the uninstall entry) is left behind when they do.
+        let version = file_version(&r.exe).or(r.version);
         return Some(Installed {
             folder: r.folder,
             exe: r.exe,
-            version: r.version,
+            version,
             source: Source::Hub,
             kind: r.kind,
         });
@@ -96,18 +99,17 @@ pub fn detect(app: &CatalogApp, store: &Store, env: &Env) -> Option<Installed> {
             let Some(loc) = reg_string(*hive, &path, "InstallLocation") else {
                 continue;
             };
-            let loc = loc.trim().trim_matches('"').trim();
-            if loc.is_empty() {
+            let Some(folder) = install_folder(&loc, &|n| std::env::var(n).ok()) else {
                 continue;
-            }
-            let folder = PathBuf::from(loc.trim_end_matches(['\\', '/']));
+            };
             let exe = folder.join(app.exe);
             if !exe.is_file() {
                 continue;
             }
-            let version = reg_string(*hive, &path, "DisplayVersion")
-                .and_then(|v| Version::parse(v.trim().trim_start_matches(['v', 'V'])).ok())
-                .or_else(|| file_version(&exe));
+            let version = file_version(&exe).or_else(|| {
+                reg_string(*hive, &path, "DisplayVersion")
+                    .and_then(|v| Version::parse(v.trim().trim_start_matches(['v', 'V'])).ok())
+            });
             return Some(Installed {
                 folder,
                 exe,
@@ -141,6 +143,49 @@ pub fn detect(app: &CatalogApp, store: &Store, env: &Env) -> Option<Installed> {
         }
     }
     None
+}
+
+/// The folder an uninstall entry's `InstallLocation` names: quotes and a trailing separator
+/// removed, `%NAME%` expanded through `get` (a REG_EXPAND_SZ value is read raw), and only an
+/// absolute path accepted, so a relative one is never resolved against whatever folder Hub was
+/// started in.
+fn install_folder(loc: &str, get: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    let loc = loc.trim().trim_matches('"').trim();
+    let loc = expand_env(loc, get);
+    let loc = loc.trim().trim_end_matches(['\\', '/']);
+    if loc.is_empty() {
+        return None;
+    }
+    let p = PathBuf::from(loc);
+    p.is_absolute().then_some(p)
+}
+
+/// `%NAME%` replaced by its value; an unknown name or a lone `%` stays as written.
+fn expand_env(s: &str, get: &dyn Fn(&str) -> Option<String>) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find('%') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 1..];
+        match after.find('%') {
+            Some(j) if j > 0 => match get(&after[..j]) {
+                Some(v) => {
+                    out.push_str(&v);
+                    rest = &after[j + 1..];
+                }
+                None => {
+                    out.push('%');
+                    rest = after;
+                }
+            },
+            _ => {
+                out.push('%');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Records what was found in `installed.ini`, so Hub owns the row from now on. The app itself
@@ -198,7 +243,19 @@ fn same_path(a: &Path, b: &Path) -> bool {
 /// fixed file version (the fourth part is dropped). `None` when there is no resource, the file
 /// is not there, or the numbers are all zero. The file is read, never run.
 pub fn file_version(path: &Path) -> Option<Version> {
-    let (ms, ls) = imp::fixed_file_version(path)?;
+    let (sig, ms, ls) = imp::fixed_file_version(path)?;
+    version_from_fixed(sig, ms, ls)
+}
+
+/// The `VS_FIXEDFILEINFO` signature a valid block carries.
+const FIXED_SIGNATURE: u32 = 0xFEEF_04BD;
+
+/// `major.minor.patch` from the signature and the two version words; `None` for a wrong
+/// signature or all zeros.
+fn version_from_fixed(signature: u32, ms: u32, ls: u32) -> Option<Version> {
+    if signature != FIXED_SIGNATURE {
+        return None;
+    }
     let (major, minor, patch) = (ms >> 16, ms & 0xffff, ls >> 16);
     if major == 0 && minor == 0 && patch == 0 {
         return None;
@@ -217,9 +274,34 @@ pub fn any_running(exes: &[PathBuf]) -> bool {
         return false;
     }
     let want: Vec<String> = exes.iter().map(|p| norm(p)).collect();
-    imp::process_images()
-        .into_iter()
-        .any(|img| want.iter().any(|w| *w == norm(&img)))
+    // The same exe under another spelling (8.3 names, `..`, junctions, subst drives) is matched
+    // through the resolved path, but only for a process whose file name is one we want, so the
+    // process list is not resolved one by one.
+    let want_names: Vec<String> = exes
+        .iter()
+        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()))
+        .collect();
+    let want_real: Vec<String> = exes
+        .iter()
+        .filter_map(|p| std::fs::canonicalize(p).ok())
+        .map(|p| norm(&p))
+        .collect();
+    imp::process_images().into_iter().any(|img| {
+        let n = norm(&img);
+        if want.contains(&n) {
+            return true;
+        }
+        let name = img
+            .file_name()
+            .map(|n| n.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        // A short (8.3) file name differs from the long one, so only a name in 8.3 form or an
+        // equal name is resolved.
+        (want_names.contains(&name) || name.contains('~'))
+            && std::fs::canonicalize(&img)
+                .ok()
+                .is_some_and(|r| want_real.contains(&norm(&r)))
+    })
 }
 
 fn reg_string(hive: Hive, path: &str, name: &str) -> Option<String> {
@@ -305,8 +387,8 @@ mod imp {
         out
     }
 
-    /// (dwFileVersionMS, dwFileVersionLS)
-    pub fn fixed_file_version(path: &Path) -> Option<(u32, u32)> {
+    /// (dwSignature, dwFileVersionMS, dwFileVersionLS)
+    pub fn fixed_file_version(path: &Path) -> Option<(u32, u32, u32)> {
         let p = wide(path);
         let mut handle = 0u32;
         // SAFETY: `p` is NUL-terminated.
@@ -332,10 +414,27 @@ mod imp {
         }
         // SAFETY: length checked; read unaligned in case the block is not aligned.
         let info = unsafe { std::ptr::read_unaligned(ptr as *const VS_FIXEDFILEINFO) };
-        if info.dwSignature != 0xFEEF_04BD {
-            return None;
+        Some((info.dwSignature, info.dwFileVersionMS, info.dwFileVersionLS))
+    }
+
+    /// The full image path of a process, growing the buffer as long as the path does not fit
+    /// (up to 32 Ki units, the longest Windows path). `None` when it cannot be queried.
+    pub fn image_path(h: windows_sys::Win32::Foundation::HANDLE, start: usize) -> Option<PathBuf> {
+        let mut cap = start.max(1);
+        loop {
+            let mut buf = vec![0u16; cap];
+            let mut len = cap as u32;
+            // SAFETY: `buf` holds `len` UTF-16 units.
+            let ok = unsafe { QueryFullProcessImageNameW(h, 0, buf.as_mut_ptr(), &mut len) };
+            if ok != 0 {
+                let n = (len as usize).min(buf.len());
+                return Some(PathBuf::from(String::from_utf16_lossy(&buf[..n])));
+            }
+            if cap >= 32 * 1024 {
+                return None;
+            }
+            cap = (cap * 2).min(32 * 1024);
         }
-        Some((info.dwFileVersionMS, info.dwFileVersionLS))
     }
 
     /// The full image path of every process this user can query.
@@ -362,7 +461,6 @@ mod imp {
             pids.resize(n, 0);
         }
         let mut out = Vec::new();
-        let mut buf = vec![0u16; 1024];
         for &pid in &pids[..count] {
             if pid == 0 {
                 continue;
@@ -372,15 +470,10 @@ mod imp {
             if h.is_null() {
                 continue;
             }
-            let mut len = buf.len() as u32;
-            // SAFETY: `buf` holds `len` UTF-16 units.
-            let ok = unsafe { QueryFullProcessImageNameW(h, 0, buf.as_mut_ptr(), &mut len) };
+            let img = image_path(h, 1024);
             // SAFETY: `h` was opened above.
             unsafe { CloseHandle(h) };
-            if ok != 0 {
-                let n = (len as usize).min(buf.len());
-                out.push(PathBuf::from(String::from_utf16_lossy(&buf[..n])));
-            }
+            out.extend(img);
         }
         out
     }
@@ -394,7 +487,7 @@ mod imp {
     pub fn reg_string(_: Hive, _: &str, _: &str) -> Option<String> {
         None
     }
-    pub fn fixed_file_version(_: &Path) -> Option<(u32, u32)> {
+    pub fn fixed_file_version(_: &Path) -> Option<(u32, u32, u32)> {
         None
     }
     pub fn process_images() -> Vec<PathBuf> {
@@ -802,6 +895,205 @@ mod tests {
         assert!(!running(parent));
     }
 
+    /// A copy of cmd.exe (a real version resource) at `rel` under the scratch folder.
+    fn real_exe(sc: &Scratch, rel: &str) -> PathBuf {
+        let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+        let cmd = PathBuf::from(root).join("System32").join("cmd.exe");
+        let p = sc.path().join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::copy(&cmd, &p).unwrap();
+        p
+    }
+
+    #[test]
+    fn the_exes_own_version_beats_a_stale_record() {
+        let sc = Scratch::new("stale-record");
+        let store = Store::at(sc.path().join("hub"));
+        let exe = real_exe(&sc, "mine/mdedit.exe");
+        let real = file_version(&exe).expect("cmd.exe has a version");
+        store.save_installed(
+            "mdedit",
+            &Record {
+                folder: sc.path().join("mine"),
+                exe: exe.clone(),
+                version: Some(v("0.0.1")),
+                kind: String::new(),
+                date: String::new(),
+            },
+        );
+        let got = detect(mdedit(), &store, &env(&sc, None)).unwrap();
+        assert_eq!(got.source, Source::Hub);
+        assert_eq!(got.version, Some(real));
+    }
+
+    #[test]
+    fn the_exes_own_version_beats_a_stale_display_version_and_fills_a_bad_one() {
+        let sc = Scratch::new("stale-display");
+        let hive = TestHive::new();
+        let store = Store::at(sc.path().join("hub"));
+        let exe = real_exe(&sc, "inst/mdedit.exe");
+        let real = file_version(&exe).expect("cmd.exe has a version");
+        let loc = sc.path().join("inst");
+        for shown in ["0.0.1", "banana"] {
+            hive.entry(
+                mdedit().uninstall_keys[0],
+                &[
+                    ("InstallLocation", loc.to_str().unwrap()),
+                    ("DisplayVersion", shown),
+                ],
+            );
+            let got = detect(mdedit(), &store, &env(&sc, Some(&hive))).unwrap();
+            assert_eq!(got.source, Source::Uninstall);
+            assert_eq!(got.version, Some(real.clone()), "DisplayVersion {shown}");
+        }
+    }
+
+    #[test]
+    fn a_found_folder_install_reads_its_version_from_the_exe() {
+        let sc = Scratch::new("folder-version");
+        let store = Store::at(sc.path().join("hub"));
+        let exe = real_exe(&sc, "Programs/mdedit/mdedit.exe");
+        let got = detect(mdedit(), &store, &env(&sc, None)).unwrap();
+        assert_eq!(got.source, Source::Folder);
+        assert_eq!(got.version, file_version(&exe));
+        assert!(got.version.is_some());
+    }
+
+    #[test]
+    fn every_program_files_root_is_searched() {
+        let sc = Scratch::new("pf-roots");
+        let store = Store::at(sc.path().join("hub"));
+        let sprawl = find("sprawl").unwrap();
+        let exe = sc.exe("PF2/Sprawl/sprawl.exe");
+        let e = Env::custom(
+            sc.path().join("Programs"),
+            vec![sc.path().join("PF1"), sc.path().join("PF2")],
+            Vec::new(),
+        );
+        assert_eq!(detect(sprawl, &store, &e).unwrap().exe, exe);
+    }
+
+    #[test]
+    fn the_first_uninstall_key_with_an_exe_wins_and_later_keys_are_tried() {
+        let sc = Scratch::new("two-keys");
+        let hive = TestHive::new();
+        let store = Store::at(sc.path().join("hub"));
+        let a = CatalogApp {
+            uninstall_keys: &["KeyA", "KeyB"],
+            ..*mdedit()
+        };
+        sc.exe("b/mdedit.exe");
+        std::fs::create_dir_all(sc.path().join("a")).unwrap();
+        // KeyA points at a folder with no exe, KeyB at one that has it.
+        hive.entry(
+            "KeyA",
+            &[("InstallLocation", sc.path().join("a").to_str().unwrap())],
+        );
+        hive.entry(
+            "KeyB",
+            &[("InstallLocation", sc.path().join("b").to_str().unwrap())],
+        );
+        let got = detect(&a, &store, &env(&sc, Some(&hive))).unwrap();
+        assert_eq!(got.folder, sc.path().join("b"));
+        // And with both valid, the first key wins.
+        sc.exe("a/mdedit.exe");
+        let got = detect(&a, &store, &env(&sc, Some(&hive))).unwrap();
+        assert_eq!(got.folder, sc.path().join("a"));
+    }
+
+    #[test]
+    fn the_local_machine_hive_maps_to_hklm() {
+        use windows_sys::Win32::System::Registry::HKEY_LOCAL_MACHINE;
+        assert_eq!(imp::root(Hive::LocalMachine), HKEY_LOCAL_MACHINE);
+        assert_eq!(imp::root(Hive::CurrentUser), HKEY_CURRENT_USER);
+    }
+
+    #[test]
+    fn a_relative_install_location_is_not_resolved_against_the_current_folder() {
+        let sc = Scratch::new("relative");
+        let hive = TestHive::new();
+        let store = Store::at(sc.path().join("hub"));
+        sc.exe("inst/mdedit.exe");
+        // The same folder as a path relative to the current directory (same drive only).
+        let cwd = std::env::current_dir().unwrap();
+        let comps = |p: &Path| {
+            p.components()
+                .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+                .collect::<Vec<_>>()
+        };
+        let (c, t) = (comps(&cwd), comps(&sc.path().join("inst")));
+        if c.first() != t.first() {
+            return;
+        }
+        let common = c.iter().zip(&t).take_while(|(a, b)| a == b).count();
+        let mut rel = PathBuf::new();
+        for _ in common..c.len() {
+            rel.push("..");
+        }
+        for part in sc.path().join("inst").components().skip(common) {
+            rel.push(part);
+        }
+        assert!(cwd.join(&rel).join("mdedit.exe").is_file());
+        hive.entry(
+            mdedit().uninstall_keys[0],
+            &[("InstallLocation", rel.to_str().unwrap())],
+        );
+        assert_eq!(detect(mdedit(), &store, &env(&sc, Some(&hive))), None);
+    }
+
+    #[test]
+    fn install_folder_expands_variables_and_refuses_relative_paths() {
+        let get = |n: &str| (n == "HUBX").then(|| r"C:\Users\me\AppData\Local".to_string());
+        assert_eq!(
+            install_folder(r"%HUBX%\Programs\mdedit", &get),
+            Some(PathBuf::from(r"C:\Users\me\AppData\Local\Programs\mdedit"))
+        );
+        assert_eq!(
+            install_folder("\"C:\\Apps\\x\\\"", &get),
+            Some(PathBuf::from(r"C:\Apps\x"))
+        );
+        for bad in [
+            ".", "foo", r"foo\bar", "", "  ", "%NOPE%", r"\rooted", "C:rel",
+        ] {
+            assert_eq!(install_folder(bad, &get), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_process_path_longer_than_the_first_buffer_is_still_read() {
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+        // SAFETY: the pseudo handle of this process needs no closing.
+        let h = unsafe { GetCurrentProcess() };
+        let me = std::env::current_exe().unwrap();
+        // A 4-unit buffer is far too small for any path: it must grow, not give up.
+        let got = imp::image_path(h, 4).expect("the path is read after growing");
+        assert_eq!(norm(&got), norm(&me));
+    }
+
+    #[test]
+    fn running_matches_the_same_exe_spelled_with_dot_dot_segments() {
+        let me = std::env::current_exe().unwrap();
+        let dir = me.parent().unwrap();
+        let spelled = dir
+            .join("..")
+            .join(dir.file_name().unwrap())
+            .join(me.file_name().unwrap());
+        assert!(running(&spelled), "{}", spelled.display());
+    }
+
+    #[test]
+    fn the_system_env_names_the_three_uninstall_lists() {
+        let e = Env::system();
+        assert_eq!(e.uninstall_roots.len(), 3);
+        assert!(e.uninstall_roots[2].1.contains("WOW6432Node"));
+    }
+}
+
+/// Pure logic, tested on every platform.
+#[cfg(test)]
+mod pure_tests {
+    use super::*;
+
     #[test]
     fn the_date_is_a_calendar_date() {
         assert_eq!(civil(0), "1970-01-01");
@@ -811,9 +1103,41 @@ mod tests {
     }
 
     #[test]
-    fn the_system_env_names_the_three_uninstall_lists() {
-        let e = Env::system();
-        assert_eq!(e.uninstall_roots.len(), 3);
-        assert!(e.uninstall_roots[2].1.contains("WOW6432Node"));
+    fn paths_compare_the_way_windows_does() {
+        let a = norm(Path::new(r"C:\Apps\Foo\"));
+        assert_eq!(a, norm(Path::new("c:/apps/foo")));
+        assert_eq!(a, norm(Path::new(r"\\?\C:\APPS\FOO")));
+        assert_ne!(a, norm(Path::new(r"C:\Apps\Foo2")));
+    }
+
+    #[test]
+    fn the_version_comes_from_the_right_words() {
+        // 10.0.26100.1 -> 10.0.26100, the fourth part dropped.
+        let v = version_from_fixed(FIXED_SIGNATURE, (10 << 16) | 3, (26100 << 16) | 1).unwrap();
+        assert_eq!((v.major, v.minor, v.patch), (10, 3, 26100));
+        let v = version_from_fixed(FIXED_SIGNATURE, (1 << 16) | 2, 3 << 16).unwrap();
+        assert_eq!(v.to_string(), "1.2.3");
+        // Only the fourth part set is still "no version" of Hub's kind.
+        assert_eq!(version_from_fixed(FIXED_SIGNATURE, 0, 0), None);
+        assert_eq!(version_from_fixed(FIXED_SIGNATURE, 0, 7), None);
+        // A block with the wrong signature is not trusted.
+        assert_eq!(version_from_fixed(0x1234_5678, 1 << 16, 0), None);
+        assert_eq!(version_from_fixed(0, 1 << 16, 0), None);
+    }
+
+    #[test]
+    fn variables_expand_and_odd_percent_signs_stay() {
+        let get = |n: &str| match n {
+            "A" => Some("x".to_string()),
+            "B" => Some("y z".to_string()),
+            _ => None,
+        };
+        assert_eq!(expand_env(r"%A%\%B%", &get), r"x\y z");
+        assert_eq!(expand_env("100%", &get), "100%");
+        assert_eq!(expand_env("%%", &get), "%%");
+        assert_eq!(expand_env(r"%NOPE%\a", &get), r"%NOPE%\a");
+        assert_eq!(expand_env("a%b", &get), "a%b");
+        assert_eq!(expand_env("%A%%A%", &get), "xx");
+        assert_eq!(expand_env("", &get), "");
     }
 }

@@ -2,7 +2,7 @@
 //! what it found), `settings.ini`, and the download cache. All in one folder, `$HUB_DATA` or
 //! `%LOCALAPPDATA%\Hub`, created on demand and never at open. Everything read from disk is
 //! parsed without a path that can panic; a damaged file reads as empty.
-use mdshared_app::settings::{decode_path, encode_path, escape, unescape, write_atomic};
+use mdshared_app::settings::{decode_path, encode_path, escape, unescape};
 use mdshared_app::update::Version;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -139,8 +139,9 @@ fn id_ok(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// A piece of a file name: anything outside `[A-Za-z0-9._-]` becomes `_`, so no input can name
-/// another folder.
+/// A piece of a file name: anything outside `[A-Za-z0-9._-]` becomes `_`, trailing dots are
+/// dropped (Windows drops them, so `x.` and `x` would be one folder), and a Windows device name
+/// (`con`, `nul`, `com1`, ...) gets a `_` in front. No input can name another folder or a device.
 fn plain(s: &str) -> String {
     let t: String = s
         .chars()
@@ -152,10 +153,19 @@ fn plain(s: &str) -> String {
             }
         })
         .collect();
-    if t.is_empty() || t.chars().all(|c| c == '.') {
-        "_".into()
+    let t = t.trim_end_matches('.');
+    if t.is_empty() {
+        return "_".into();
+    }
+    let stem = t.split('.').next().unwrap_or("").to_ascii_lowercase();
+    let device = matches!(stem.as_str(), "con" | "prn" | "aux" | "nul")
+        || (stem.len() == 4
+            && (stem.starts_with("com") || stem.starts_with("lpt"))
+            && matches!(stem.as_bytes()[3], b'1'..=b'9'));
+    if device {
+        format!("_{t}")
     } else {
-        t
+        t.to_string()
     }
 }
 
@@ -199,7 +209,31 @@ impl Store {
 
     fn write_ini(&self, name: &str, ini: &Ini) {
         // A failed write loses a bookkeeping line, never the app: nothing to report upward.
-        let _ = write_atomic(&self.dir.join(name), &ini.render());
+        let p = self.dir.join(name);
+        if let Some(d) = p.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        let _ = write_bytes_atomic(&p, ini.render().as_bytes());
+    }
+
+    /// Reads the ini, lets `f` change it (true = write it back), all while holding the store's
+    /// lock, so two Hub processes (tray and window) cannot lose each other's change.
+    fn modify(&self, name: &str, f: impl FnOnce(&mut Ini) -> bool) {
+        let _lock = Lock::take(&self.dir);
+        // Under the lock no write of this file is in flight: a temp file left by a crash is
+        // dead, and goes.
+        if let Ok(rd) = std::fs::read_dir(&self.dir) {
+            for e in rd.flatten() {
+                let n = e.file_name().to_string_lossy().into_owned();
+                if n.starts_with(&format!("{name}.")) && n.ends_with(".tmp") {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+        let mut ini = self.read_ini(name);
+        if f(&mut ini) {
+            self.write_ini(name, &ini);
+        }
     }
 
     // ---- installed.ini ----
@@ -229,7 +263,6 @@ impl Store {
         if !id_ok(id) {
             return;
         }
-        let mut ini = self.read_ini("installed.ini");
         let mut kv = vec![
             ("folder".to_string(), encode_path(&r.folder)),
             ("exe".to_string(), encode_path(&r.exe)),
@@ -239,8 +272,10 @@ impl Store {
         }
         kv.push(("kind".into(), escape(&r.kind)));
         kv.push(("date".into(), escape(&r.date)));
-        ini.set_section(id, kv);
-        self.write_ini("installed.ini", &ini);
+        self.modify("installed.ini", |ini| {
+            ini.set_section(id, kv);
+            true
+        });
     }
 
     /// Drops Hub's record of the app (the app itself is untouched).
@@ -248,12 +283,11 @@ impl Store {
         if !id_ok(id) {
             return;
         }
-        let mut ini = self.read_ini("installed.ini");
-        let before = ini.sections.len();
-        ini.remove_section(id);
-        if ini.sections.len() != before {
-            self.write_ini("installed.ini", &ini);
-        }
+        self.modify("installed.ini", |ini| {
+            let before = ini.sections.len();
+            ini.remove_section(id);
+            ini.sections.len() != before
+        });
     }
 
     // ---- skipped versions (settings.ini, section [skipped]) ----
@@ -274,10 +308,11 @@ impl Store {
         if !id_ok(id) {
             return;
         }
-        let mut ini = self.read_ini("settings.ini");
         let v = version.map(escape);
-        ini.set("skipped", id, v.as_deref());
-        self.write_ini("settings.ini", &ini);
+        self.modify("settings.ini", |ini| {
+            ini.set("skipped", id, v.as_deref());
+            true
+        });
     }
 
     // ---- checks.ini ----
@@ -289,9 +324,11 @@ impl Store {
     }
 
     pub fn set_last_check(&self, t: u64) {
-        let mut ini = self.read_ini("checks.ini");
-        ini.set("checks", "last_check", Some(&t.to_string()));
-        self.write_ini("checks.ini", &ini);
+        let v = t.to_string();
+        self.modify("checks.ini", |ini| {
+            ini.set("checks", "last_check", Some(&v));
+            true
+        });
     }
 
     pub fn failures(&self) -> u32 {
@@ -302,9 +339,11 @@ impl Store {
     }
 
     pub fn set_failures(&self, n: u32) {
-        let mut ini = self.read_ini("checks.ini");
-        ini.set("checks", "failures", Some(&n.to_string()));
-        self.write_ini("checks.ini", &ini);
+        let v = n.to_string();
+        self.modify("checks.ini", |ini| {
+            ini.set("checks", "failures", Some(&v));
+            true
+        });
     }
 
     /// The last manifest text that arrived for the app, so the window has rows with no network.
@@ -355,9 +394,10 @@ impl Store {
     }
 
     pub fn set_view(&self, v: ViewMode) {
-        let mut ini = self.read_ini("settings.ini");
-        ini.set("settings", "view", Some(v.as_str()));
-        self.write_ini("settings.ini", &ini);
+        self.modify("settings.ini", |ini| {
+            ini.set("settings", "view", Some(v.as_str()));
+            true
+        });
     }
 
     /// Hours between checks; 0 = never (manual only). Default 6.
@@ -369,22 +409,83 @@ impl Store {
     }
 
     pub fn set_interval_hours(&self, h: u32) {
-        let mut ini = self.read_ini("settings.ini");
-        ini.set("settings", "interval_hours", Some(&h.to_string()));
-        self.write_ini("settings.ini", &ini);
+        let v = h.to_string();
+        self.modify("settings.ini", |ini| {
+            ini.set("settings", "interval_hours", Some(&v));
+            true
+        });
     }
 }
 
+/// Writes beside the file under a name no other writer shares, then renames over it.
 fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static SEQ: AtomicU32 = AtomicU32::new(0);
     let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
+    tmp.push(format!(
+        ".{}-{}.tmp",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
     let tmp = PathBuf::from(tmp);
-    let mut f = std::fs::File::create(&tmp)?;
-    f.write_all(bytes)?;
-    f.sync_all()?;
-    drop(f);
-    std::fs::rename(&tmp, path)
+    let r = (|| {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, path)
+    })();
+    if r.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    r
+}
+
+/// A lock between Hub processes on one store folder: a file made with `create_new`, removed on
+/// drop. A lock older than 10 seconds is a crashed holder's and is broken; after 3 seconds of
+/// waiting the caller goes on without it (a bookkeeping write is never worth a hang).
+struct Lock(Option<PathBuf>);
+
+impl Lock {
+    fn take(dir: &Path) -> Lock {
+        let _ = std::fs::create_dir_all(dir);
+        let p = dir.join(".hub.lock");
+        let start = std::time::Instant::now();
+        loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&p)
+            {
+                Ok(_) => return Lock(Some(p)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let stale = std::fs::metadata(&p)
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.elapsed().ok())
+                        .is_some_and(|age| age > std::time::Duration::from_secs(10));
+                    if stale {
+                        let _ = std::fs::remove_file(&p);
+                        continue;
+                    }
+                }
+                Err(_) => {}
+            }
+            if start.elapsed() > std::time::Duration::from_secs(3) {
+                return Lock(None);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+}
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        if let Some(p) = &self.0 {
+            let _ = std::fs::remove_file(p);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -574,6 +675,80 @@ mod tests {
         assert_eq!(s.interval_hours(), 0);
         // Settings and skipped versions share settings.ini without clobbering each other.
         assert_eq!(s.skipped("mdview").as_deref(), Some("3.1.0"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn device_names_and_trailing_dots_never_name_a_device_or_a_twin_folder() {
+        let s = Store::at(PathBuf::from("base"));
+        for bad in [
+            "con", "NUL", "aux", "prn", "com1", "LPT9", "con.txt", "Com3.x",
+        ] {
+            let p = s.rollback_dir(bad);
+            let leaf = p.file_name().unwrap().to_string_lossy().into_owned();
+            assert!(leaf.starts_with('_'), "{bad} -> {leaf}");
+        }
+        // com0 and com10 are not devices.
+        assert_eq!(plain("com10"), "com10");
+        assert_eq!(plain("com0"), "com0");
+        assert_eq!(plain("x-1."), plain("x-1"));
+        assert_eq!(s.cache_dir("mdedit", "1.2."), s.cache_dir("mdedit", "1.2"));
+        assert_eq!(plain("..."), "_");
+        assert_eq!(plain("a b"), "a_b");
+    }
+
+    #[test]
+    fn two_writers_on_one_file_lose_nothing() {
+        let dir = scratch("race");
+        let a = Store::at(&dir);
+        let b = Store::at(&dir);
+        let ta = std::thread::spawn(move || {
+            for i in 0..150u32 {
+                a.set_failures(i);
+            }
+        });
+        let tb = std::thread::spawn(move || {
+            for i in 0..150u64 {
+                b.set_last_check(i);
+            }
+        });
+        ta.join().unwrap();
+        tb.join().unwrap();
+        let s = Store::at(&dir);
+        assert_eq!(s.failures(), 149);
+        assert_eq!(s.last_check(), Some(149));
+        assert!(!dir.join(".hub.lock").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_stale_lock_is_broken_and_a_failed_write_leaves_no_temp_file() {
+        let dir = scratch("stale");
+        std::fs::create_dir_all(&dir).unwrap();
+        let lock = dir.join(".hub.lock");
+        std::fs::write(&lock, b"").unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&lock)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let s = Store::at(&dir);
+        let t = std::time::Instant::now();
+        s.set_failures(7);
+        assert!(t.elapsed() < std::time::Duration::from_secs(2));
+        assert_eq!(s.failures(), 7);
+        // A rename onto a folder fails; the temp file must not stay behind.
+        let target = dir.join("blocked");
+        std::fs::create_dir_all(&target).unwrap();
+        assert!(write_bytes_atomic(&target, b"x").is_err());
+        let left: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -33,9 +33,16 @@ Fixed already (do not change signatures without saying so in your report): `cata
 - `checks.ini`: `last_check() -> Option<u64>`, `set_last_check(u64)`, `failures() -> u32`,
   `set_failures(u32)`, and per app the cached `latest` manifest text so the window shows rows
   with no network: `cached_manifest(id) -> Option<Vec<u8>>`, `set_cached_manifest(id, &[u8])`.
-- `cache_dir(id, version) -> PathBuf` (`<dir>\cache\<id>-<version>`), `rollback_dir(id) -> PathBuf`.
-- Settings (`settings.ini` through `mdshared_app::settings` if it fits, else a tiny reader):
-  `view` (list/large/small), `interval_hours` (default 6, 0 = never).
+  AS BUILT: the manifest text is the file `<dir>\latest\<id>.txt`, not a part of checks.ini;
+  `skipped` lives in settings.ini, section `[skipped]`.
+- `cache_dir(id, version) -> PathBuf` (`<dir>\cache\<id>-<version>`), `rollback_dir(id) -> PathBuf`
+  (parts are made safe: no device names, no trailing dots).
+- Settings (`settings.ini`, a tiny reader in state.rs):
+  `view() -> ViewMode` (`ViewMode::{List, Large, Small}` in hub-core; `vm::View` in bins/hub is
+  mapped from it), `interval_hours` (default 6, 0 = never).
+- Every read-modify-write of an ini holds a lock file `<dir>\.hub.lock`, so the tray and the
+  window cannot lose each other's change; temp files are named per process and write.
+- AS BUILT, detect: the exe's own version resource wins over Hub's record and DisplayVersion.
 
 ## detect.rs
 - `pub struct Env { pub programs: PathBuf /* %LOCALAPPDATA%\Programs */, pub program_files: Vec<PathBuf>, pub uninstall_roots: Vec<(Hive, String)> }` with `Env::system()` and a way for tests to
