@@ -415,6 +415,77 @@ impl Store {
             true
         });
     }
+
+    /// A yes/no setting of `[settings]`: `1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off`
+    /// (any case); anything else, or nothing, is `default`.
+    fn flag(&self, key: &str, default: bool) -> bool {
+        match self
+            .read_ini("settings.ini")
+            .get("settings", key)
+            .map(|v| v.trim().to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("1" | "true" | "yes" | "on") => true,
+            Some("0" | "false" | "no" | "off") => false,
+            _ => default,
+        }
+    }
+
+    fn set_flag(&self, key: &str, on: bool) {
+        self.modify("settings.ini", |ini| {
+            ini.set("settings", key, Some(if on { "1" } else { "0" }));
+            true
+        });
+    }
+
+    /// "Tell me when updates are found": one balloon per check that found something. Default on.
+    pub fn notify_enabled(&self) -> bool {
+        self.flag("notify", true)
+    }
+
+    pub fn set_notify_enabled(&self, on: bool) {
+        self.set_flag("notify", on);
+    }
+
+    /// Whether the tray icon is shown. Default on.
+    pub fn tray_enabled(&self) -> bool {
+        self.flag("tray", true)
+    }
+
+    pub fn set_tray_enabled(&self, on: bool) {
+        self.set_flag("tray", on);
+    }
+
+    /// What Hub last wrote for "start with Windows". Only a record, for the settings page to
+    /// show before it reads the registry: the registry value (`autostart.rs`) is the truth.
+    /// Default off.
+    pub fn autostart_enabled(&self) -> bool {
+        self.flag("autostart", false)
+    }
+
+    pub fn set_autostart_enabled(&self, on: bool) {
+        self.set_flag("autostart", on);
+    }
+
+    /// The memory of the notification rule (`notify::Memory::to_line`): what was already told.
+    pub fn notified(&self) -> String {
+        self.read_ini("settings.ini")
+            .get("settings", "notified")
+            .map(|v| unescape(v).trim().to_string())
+            .unwrap_or_default()
+    }
+
+    pub fn set_notified(&self, line: &str) {
+        let v = escape(line);
+        self.modify("settings.ini", |ini| {
+            ini.set(
+                "settings",
+                "notified",
+                if line.is_empty() { None } else { Some(&v) },
+            );
+            true
+        });
+    }
 }
 
 /// Writes beside the file under a name no other writer shares, then renames over it.
@@ -763,5 +834,35 @@ mod tests {
             s.rollback_dir("mdedit"),
             PathBuf::from("D:\\hub").join("rollback").join("mdedit")
         );
+    }
+    #[test]
+    fn tray_notify_autostart_settings_default_and_round_trip() {
+        let dir = scratch("flags");
+        let s = Store::at(&dir);
+        assert!(s.notify_enabled() && s.tray_enabled() && !s.autostart_enabled());
+        s.set_notify_enabled(false);
+        s.set_tray_enabled(false);
+        s.set_autostart_enabled(true);
+        assert!(!s.notify_enabled() && !s.tray_enabled() && s.autostart_enabled());
+        // They do not disturb a neighbour.
+        s.set_interval_hours(3);
+        assert_eq!(s.interval_hours(), 3);
+        assert!(!s.notify_enabled());
+        // A hand-edited or garbled value falls back to the default.
+        std::fs::write(
+            dir.join("settings.ini"),
+            "[settings]
+notify=maybe
+tray=OFF
+autostart=Yes
+",
+        )
+        .unwrap();
+        assert!(s.notify_enabled() && !s.tray_enabled() && s.autostart_enabled());
+        s.set_notified("mdedit 1.2.0	Sprawl 0.3.0");
+        assert_eq!(s.notified(), "mdedit 1.2.0	Sprawl 0.3.0");
+        s.set_notified("");
+        assert_eq!(s.notified(), "");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
