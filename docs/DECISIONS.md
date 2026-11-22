@@ -104,3 +104,43 @@ Hub sends no token; a private project is made public when it ships.
 Created on demand, never at open; every write is atomic and under a lock file. Every test and
 every run by an agent sets `HUB_DATA` (CLAUDE.md rule 4). The exe's own version resource wins over
 Hub's record and over `DisplayVersion` when the three disagree (what is on disk is the truth).
+
+## D-018 Closing the window keeps Hub in the tray (owner, 2026-11-22; refines D-014)
+With the tray on (setting `tray`, default on, and no `--no-tray`) the window is created on demand
+and destroyed on close; the process stays. "Quit Hub" in the tray menu (or `hub --quit`) ends it.
+With the tray off, closing the window quits. Would change: an owner who wants the X to quit.
+
+## D-019 The tray lives on a thread of its own, on a hidden top-level window
+Not on the winit loop, and not a message-only window: a message-only window is not sent the
+broadcast `TaskbarCreated`, so the icon would not come back after Explorer restarts. The thread
+sleeps in `GetMessageW` (no timer), owns only a snapshot from the engine, and posts a command to
+the winit loop. The menu is the system's (`TrackPopupMenu`); no tray or process crate.
+
+## D-020 Start with Windows: the real Run key only for an installed exe
+Value `Hub` = `"<path>\hub.exe" --tray` under `HKCU\...\Run`, off by default. A copy not under an
+installed folder (cargo's release/debug/deps) refuses to write or delete it, so a development
+build cannot put a build path into the owner's startup list. Test-hooks builds take
+`HUB_RUN_KEY_PATH`, accepted only under `Software\HubTest\`. With `--tray` and the tray setting
+off, `--tray` wins (a Run-key start still shows the icon).
+
+## D-021 One balloon per check that found something; Hub's own update first
+`3 updates: mdedit, Sprawl, Inbound`. Not again for what was told (a newer version of a told app,
+or an app that went away and came back, is news again); memory is kept in `settings.ini`
+(`notified`) and kept across a failed look. Never when the setting is off or no icon is up (told
+later); focused window counts as told. Finished and failed updates are never notified. Click opens
+the window. Hub's own update is listed first; "Update all (N)" counts apps only, the badge and
+tooltip count Hub's too.
+
+## D-022 Self-update: Hub's own `hub-update.txt`, checked first, swapped last
+Format 1 of the shared updater, `uninstall_key` None, `HUB_UPDATE_MANIFEST` honoured. The URL
+is one constant, `selfupdate::MANIFEST_URL` (`Kaan88/hub-rs`, a working name: plan question 1 is
+unanswered). Downloads are pinned under the repository's releases path with no dot segments or
+encoded separators. The exe is staged as `hub.exe.new`; the swap happens only on "Restart now" or
+at quit, and only when no install runs (else deferred until the installs finish); `swap_in` puts
+the old exe back on failure; restart uses `relaunch` and keeps `--tray` only if no window was
+open. A staged exe not applied is deleted by `clean_up` at the next start and fetched again.
+A copy that is not installed never asks for Hub's manifest.
+
+## D-023 The settings card shows all three groups at once
+General, Updates and About are all visible at once; the category list marks a group but no page
+is swapped (the mock has pages). Would change: if the card grows past one screen.

@@ -10,72 +10,77 @@ Nothing. No release, no tag, no pushed repository, no GitHub repository, `ci` ne
 ## On `main`, committed
 
 - `crates/hub-core`: catalog (four apps), model, `hub.txt` parser and writer plus the legacy
-  stopgap (`manifest.rs`), Hub's own files (`state.rs`), detection (`detect.rs`), checking
-  (`check.rs`), transport (`transport.rs`: `Net`, `FileRoot`), installing (`install.rs`: files
-  and setup kinds, running apps asked to close, roll back of files installs, launch).
-  Verified here, 2026-11-22: `cargo test --release -p hub-core`, 143 passed, 1 ignored.
-- `bins/hub` drawing: `vm view grid panes ui demo shot`; `hub --shot` renders ten demo states in
-  list, large and small views, both themes. `tests/shots.sh` renders all of them at 1280x800 and
-  860x600 (120 PNGs, about 15 s, byte-identical on two runs); `tests/shots-check.sh` checks them.
-  Looked at: `main-list-dark-1280x800` only; the other 119 were not looked at one by one.
-- `tools/write-hub-txt.ps1`, `tools/make-samples.ps1`, `tools/samples/<app>/hub.txt` for the four
-  apps (GitHub's real sizes and hashes of each project's latest release). The four samples parse
-  and round-trip with `manifest::parse` (checked from a scratch crate outside the repository;
-  there is no test in the repository for it yet).
-- Docs: this file, `DECISIONS.md`, `DESIGN.md`, `CODE.md`, `APP-CHANGES.md`, `RELEASE.md`,
-  `INTERFACES.md`; `CLAUDE.md`, `README.md`; `.github/workflows/ci.yml` (never run).
-
-## In the checkout, not committed, not mine
-
-`bins/hub/src/{app,glue,work,cli,trace,e2e_tests,glue_tests}.rs` and an edit of `main.rs`: the
-window, its engine and their tests, being written by another agent. `docs/DESIGN.md` describes
-them only from their headers. `cargo build --release -p hub` and `cargo clippy ... -D warnings`
-passed with them at the time of writing; `cargo fmt --all --check` reports a difference in
-`app.rs` (theirs). Not run by me: their tests (they may open windows), the window itself.
+  stopgap, Hub's own files (`state.rs`), detection, checking, transport, installing, and the tray
+  work: `autostart` (Run key), `selfupdate` (Hub's own update), `notify` (balloon text and memory).
+- `bins/hub`: the window (`app`, winit + softbuffer, created on demand), its engine (`glue`),
+  workers (`work`), `cli`, drawing (`vm view grid panes ui`), `--shot` and `demo`, and the tray
+  work: `tray` (icon, system menu, balloon, on a thread of its own), `icon` (the icon and badge
+  drawn at run time), `settings` (the card of the sliders button).
+- Tray: closing the window keeps Hub in the tray, "Quit Hub" / `hub --quit` ends it; `--tray`
+  starts with no window and the first check 2 minutes later; badge with the update count; one
+  balloon per check that found something (D-021); the icon is re-added on `TaskbarCreated`.
+- Start with Windows (Run key, off by default; only for an installed exe, D-020).
+- Self-update (D-022): checked first, staged, swapped last, restart. Works only for an installed
+  copy; nothing installs Hub yet, so it has run only on a scratch copy of the exe.
+- Settings card: start with Windows, tray, notifications, check interval, update Hub.
+- Verified 2026-11-22 on this PC: `cargo fmt --all --check` clean; `cargo clippy --workspace
+  --all-targets -D warnings` clean with and without `--features hub/test-hooks`; `cargo test
+  --workspace` 114 (hub) + 180 (hub-core, 1 ignored), same with test-hooks; no `HKCU\Software\HubTest`
+  left behind. Shots: 156 PNGs, check clean.
+- Budgets measured (release, `--behind`, fresh `HUB_DATA`, 11 runs unless noted):
+  | | now | budget | before the tray work |
+  |---|---|---|---|
+  | first frame, window path (`--demo main`) | median 62.3 ms, 53.3 to 87.3 | < 100 ms | 67.7 ms |
+  | private memory, window open | 9.2 MiB, 9.1 to 9.3 | < 30 MiB | 9.2 MiB |
+  | private memory, tray only (9 runs) | 2.9 MiB, 2.9 to 3.0 | < 8 MiB | none |
+  | tray only after 20 open/close cycles | 5.1 to 5.9 MiB, flat at the end | < 8 MiB | none |
+  | window open during the cycles | 9.4 to 10.2 MiB | < 30 MiB | none |
+  | idle CPU over 10 s, tray only / window open | 0 ms / 0 ms | none | 0 |
+  | exe size | 3,400,704 bytes | none | 3.18 MB |
+  The first frame was measured with `--demo main` (no engine work on the path). A real
+  window-first start without `--demo` was not timed here (it needs a test-hooks build and a fake
+  github root); the integrator's 212 to 244 ms for it is not reproduced and not explained here.
 
 ## What does not exist
 
-- **A working window on Windows has not been seen by me.** Nothing here has run as a program in
-  a window; every claim about the tray, Run key, single instance, notifications, start at login
-  is untested. The plan's phase 0 tray, phase 6 (Hub's installer, self-update, release workflow,
-  first run, Settings) are not built.
-- Streaming downloads with resume (`fetch_to_file`), a free-space check (D-005). Downloads are
-  whole bodies in memory.
-- Zip installs (refused), uninstalling from Hub, roll back of setup installs, notes on demand
-  (`notes.file`), skipping a version in the window (the store has it), the pre-release channel.
+- **Seen live: nothing.** The balloon, the icon with its badge, the tray menu, an Explorer
+  restart, a click in the settings card were not seen or used by a person. The tray starts and
+  stops, the window opens and closes 20 times by message here, and the card is checked by tests
+  and shots only. Routing of mouse, keyboard and wheel into the card (`app.rs`) is compiled and
+  read, not exercised.
+- Hub's installer and release workflow; a repository for Hub (`hub-rs` is a working name).
+- "Swap at next start" for a downloaded Hub: it is swapped at "Restart now" or at quit, else
+  deleted by `clean_up` at the next start and fetched again.
+- Streaming downloads with resume, free-space check (D-005): downloads are whole bodies in memory.
+- Zip installs (refused), uninstalling from Hub, roll back of setup installs, notes on demand,
+  skipping a version in the window, the pre-release channel.
 - The `close` request for mdedit and mdview, the `managed-by` stand-down (D-007), and every app
   change in `docs/APP-CHANGES.md`: proposals, applied to nothing.
 - Linux and macOS (the window is Windows-only; `--shot` works everywhere).
-- Budgets measured: none. First frame, private memory, idle CPU of the window: not measured by
-  me (`--trace` exists, `docs/CODE.md`).
-- A test in the repository that parses `tools/samples`; a test that `write-hub-txt.ps1` and the
-  parser agree on refusals (the script mirrors the parser by hand, D-004).
-- Anything run by hand on Windows with a real installer (plan section 12).
 
 ## Known wrong, or at risk
 
-- The ci workflow has never run: its Windows-only job, `bash tests/shots.sh` under Git Bash on
-  `windows-latest`, and the pinned toolchain `1.99.1` (copied from mdedit) are unproven there.
-- **Inbound's `latest` is fragile**: `android-v0.0.9` is a non-pre-release newer than `v0.9.0`
-  and `latest` still resolves to `v0.9.0`, so it was made with "latest: false"; the next one made
-  without it takes `releases/latest/download/hub.txt` away (and Inbound's own updater's
-  `manifest.json`). `docs/APP-CHANGES.md`.
+- Closing the window leaves the tray process at 5 to 6 MiB, not the 2.9 MiB it started with (the
+  winit loop and heap keep what the window used). Under budget, but not back to start.
+- The settings card's category list marks a group but shows all three at once (D-023).
+- Only 4 of the new shots were looked at one by one (settings general light 1280x800, settings
+  updates dark 1280x800, settings about dark 860x600, banner list light 860x600); no tray menu
+  shot exists (the menu is the system's, covered by tests only).
+- The ci workflow has never run; its Windows job and the pinned toolchain `1.99.1` are unproven.
+- Apps' manifest URLs (`manifest.rs`) were not checked for the dot-segment weakness that Hub's own
+  pin had; only Hub's self-update pin was fixed.
+- Inbound's `latest` is fragile (`android-v0.0.9` newer than `v0.9.0`); see `docs/APP-CHANGES.md`.
 - Until each app's next release carries `hub.txt`, Sprawl and Inbound show "no release
-  information"; mdedit and mdview are read through the stopgap (D-003). Uploading the samples to
-  the current releases would close the gap: the owner's call.
+  information"; mdedit and mdview are read through the stopgap (D-003).
 - The catalog's `wait` list for Inbound lacks `DownloadManager.Server.exe` and
-  `inbound-torrent.exe`, which its install tree also runs (Setup's restart manager closes them).
-- A download is a memory spike of the file's size during an install (Inbound's Setup 68.7 MiB):
-  the 30 MiB private-memory budget holds at rest only.
-- The write-hub-txt samples have CRLF line endings in a Windows checkout (git autocrlf); the
-  parser trims lines and does not mind. No `.gitattributes` is set.
-- mdedit's `uninstall_key` is `None`, so its own updater never writes `DisplayVersion`; the value
-  proposed in `APP-CHANGES.md` carries its `HKCU\` prefix, which the shared `record_version`
-  needs (a value without it is silently ignored).
+  `inbound-torrent.exe`.
+- A download is a memory spike of the file's size during an install (68.7 MiB for Inbound): the
+  30 MiB budget holds at rest only.
+- Samples have CRLF in a Windows checkout; no `.gitattributes`.
 
 ## Next
 
-1. The owner reads `docs/APP-CHANGES.md` and decides: the marker for standing down (D-007), the
-   `close` request, uploading the samples to the current releases, Inbound's Android releases.
-2. Look at the window on Windows (`--behind`, scratch `HUB_DATA`) and measure the budgets.
-3. A test in the repository for the samples; Hub's installer and release workflow (phase 6).
+1. The owner decides the repository name for Hub and whether to release (`docs/RELEASE.md`).
+2. Look at the tray, the balloon and the card live on Windows, once, briefly.
+3. The installer and release workflow; then the by-hand pass (plan section 12).
+4. The owner reads `docs/APP-CHANGES.md` and decides.

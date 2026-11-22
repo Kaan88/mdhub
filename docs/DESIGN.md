@@ -134,3 +134,44 @@ the files, URLs `https://github.com/Kaan88/<repo>/releases/download/v<version>/<
 refuses (exit 1, nothing written) whatever the parser would refuse. Windows PowerShell 5.1 and
 7. `make-samples.ps1` regenerates `tools/samples/<app>/hub.txt` from GitHub's own sizes and hashes
 of each project's latest release.
+
+## autostart.rs (hub-core)
+"Start with Windows": value `Hub` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`,
+data `"<exe>" --tray`. Every function takes the key path and value name, so tests use
+`HKCU\Software\HubTest\<unique>`; only `enable`/`disable`/`is_enabled` name the real key. The
+exe path must be absolute with no quote, `%` or control character. `remove_test_key` deletes a
+test key tree and its `HubTest` parent when empty, and refuses anything outside
+`Software\HubTest\<name>`. `glue.rs` decides which key a build gets (D-020).
+
+## selfupdate.rs (hub-core)
+Hub's own update on the shared `mdshared_app::updater` (format 1, one exe). `check` reads
+`MANIFEST_URL`; `stage` downloads and verifies into `hub.exe.new` and replaces nothing;
+`apply_when_idle` swaps only when `busy` is false; `restart` starts the new exe with `relaunch`.
+`under(url, prefix)` pins downloads (D-022). The engine (`glue.rs`) holds a `Status` (None,
+Downloading, Ready, Failed); Ready shows the banner "Hub X is ready: restart to finish" with
+`Cmd::HubRestart` / `Cmd::HubLater`, and the status bar "Hub 0.1.0 (0.2.0 ready)". Quitting also
+swaps a downloaded Hub in. No new check starts while Hub's own download runs.
+
+## notify.rs (hub-core)
+Text and the rule, no Windows call. `Pending` (name, version, own), `Memory::decide` (what is
+news), `decide_keeping` (what was told about something not seen this time is kept, so a failed
+look does not make it news again), the balloon body (at most 4 names, then "+N more"), the
+tooltip. Limits follow `NOTIFYICONDATAW` (body 200, tip 120 UTF-16 units).
+
+## tray.rs, icon.rs (bins/hub)
+`tray.rs`: pure half (`menu` for a snapshot, `classify` a click, `step` the window's life) and
+`os` (Windows): a thread with a hidden top-level window and a `GetMessageW` loop, the icon
+(`Shell_NotifyIconW`), the system menu, the balloon (`NIF_INFO`), `TaskbarCreated` re-adds the
+icon. A start that times out sets `cancelled` and leaves no thread. A balloon waits for an
+icon instead of being dropped. `icon.rs`: the tile and the badge are drawn with the shared
+painter twice (over black and over white) and the alpha solved from both, digits from a 3 x 5
+pixel font, one `HICON` per change of the count. Not covered: the real Explorer restart and the
+icon seen live (CLAUDE.md rule 6).
+
+## settings.rs (bins/hub)
+The rows of the shared `mdshared_ui::settings::Form`: Start Hub with Windows, Show an icon in the
+tray, Tell me when updates are found, Look for updates (Every hour / 6 hours / day / week /
+Never), About line and "Update Hub" (becomes "Restart now" once ready). The engine applies and
+saves a change (`state.rs`); the tray menu changes the same settings and the card is rebuilt
+when its rows differ. Opened by the sliders button (`Hit::Settings`). Shots: `settings-general`,
+`settings-updates`, `settings-about` (the last over the banner state).
