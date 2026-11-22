@@ -1,0 +1,26 @@
+[package]
+name = "hub"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Hub: launcher and updater for the apps. winit + softbuffer, every control drawn."
+
+[features]
+test-hooks = ["hub-core/test-hooks"]
+
+[[bin]]
+name = "hub"
+path = "src/main.rs"
+
+[dependencies]
+hub-core = { path = "../../crates/hub-core" }
+mdshared-app.workspace = true
+mdshared-fetch.workspace = true
+mdshared-text.workspace = true
+mdshared-ui.workspace = true
+bytemuck = "1.25"
+
+[target.'cfg(windows)'.dependencies]
+winit = { version = "=0.30.13", default-features = false, features = ["rwh_06"] }
+softbuffer = { version = "=0.4.8", default-features = false }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }

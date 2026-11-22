@@ -1,0 +1,26 @@
+[package]
+name = "hub-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Hub's headless core: catalog, hub.txt, detection, checking, downloading, installing. No window."
+
+[features]
+# Honours HUB_FETCH_ROOT (a folder standing in for github.com) and HUB_CATALOG. Never in a release.
+test-hooks = []
+
+[dependencies]
+mdshared-app.workspace = true
+mdshared-fetch.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_System_ProcessStatus",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }

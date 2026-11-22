@@ -1,0 +1,22 @@
+[workspace]
+resolver = "3"
+members = ["crates/hub-core", "bins/hub"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# The shared crates, pinned by commit as mdedit pins them (docs/CODE.md in mdedit).
+[workspace.dependencies]
+mdshared-app = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "b4b21824bd72c2e47574291c32800f2b6b6a4385" }
+mdshared-text = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "b4b21824bd72c2e47574291c32800f2b6b6a4385" }
+mdshared-ui = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "b4b21824bd72c2e47574291c32800f2b6b6a4385" }
+mdshared-fetch = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "b4b21824bd72c2e47574291c32800f2b6b6a4385" }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
