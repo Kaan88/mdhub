@@ -1,8 +1,9 @@
 # Release
 
-**No release of Hub exists, and none is cut without the owner saying so.** Nothing is pushed,
-no tag exists, `ci` has not run, and no GitHub repository (`Kaan88/hub-rs` is a working name,
-plan question 1, unanswered) has been created.
+**No release of Hub exists, and none is cut without the owner saying so.** The private repository
+`Kaan88/hub-rs` exists (a working name, plan question 1; make it public with
+`gh repo edit Kaan88/hub-rs --visibility public --accept-visibility-change-consequences` before Hub
+updates itself from it). No tag exists.
 
 ## What Hub's own release carries (self-update is built, the release is not)
 
@@ -13,11 +14,14 @@ plan question 1, unanswered) has been created.
   repository's `releases/download/` path.
 - `hub.txt`: Hub's own entry in the family's format, written by `tools/write-hub-txt.ps1`.
 - `hub.exe`, and the installer once it exists.
-- The release workflow that writes both files and checks their hashes is not written.
+- `.github/workflows/release.yml` writes both files with `tools/write-hub-update.ps1` and
+  `tools/write-hub-txt.ps1`, checks every hash, and creates the release on a pushed `v*` tag (or on
+  a manual run with publish=true); a manual run with publish=false builds and checks only. Not run yet.
 - Only an installed copy (folder not named release, debug or deps) updates itself, and only it
   may write the Run key.
-- **The installer is still not built** (Inno, per user, `%LOCALAPPDATA%\Programs\Hub`, a new
-  AppId, start at login as an option). Until it exists nothing installs Hub, so the self-update
+- The installer is `packaging/windows/hub.iss` (Inno, per user, `%LOCALAPPDATA%\Programs\Hub`,
+  AppId `{A3D5E8C1-7B42-4F96-8E1D-5C0B2F7A9D64}`, start at login as a task; built locally by
+  `tools/build-installer.ps1`, not yet run by hand). Until it exists nothing installs Hub, so the self-update
   and "Start with Windows" have only run against scratch copies and test keys.
 
 ## How one will be cut, later
