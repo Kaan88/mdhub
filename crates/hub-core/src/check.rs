@@ -3,10 +3,14 @@
 //! One GET of `hub.txt` per app (64 KiB cap, 10 s); an app whose release carries none but names
 //! a legacy manifest (mdedit, mdview) costs exactly one more. Nothing else is requested.
 //!
-//! Timing: `last_check` in the store is the time of the last *attempt* (a run in which at least
-//! one app answered, or not). With no failures the next check is due one interval after it; after
-//! failed runs it is due after 30 minutes, doubling per further failure up to the interval.
-//! Interval 0 means never: a manual check only.
+//! Timing: `last_check` in the store is the time of the last *attempt*, not of the last success:
+//! the store has one timestamp and the retry delay has to be measured from the attempt (measured
+//! from an old success, a retry would be due at once, every tick). A run counts as failed when ANY
+//! app could not be asked, so that app is tried again in 30 minutes rather than after a whole
+//! interval; with no failures the next check is due one interval after the run; after failed runs
+//! it is due after 30 minutes, doubling per further failed run up to the interval. Interval 0
+//! means never: a manual check only. (A separate last-success time, for the label, would need a
+//! field in the store.)
 use crate::catalog::CatalogApp;
 use crate::manifest;
 use crate::model::{HubManifest, Installed, Latest, Row, Source};
@@ -23,9 +27,10 @@ const AT_ONCE: usize = 2;
 /// The first retry after a failed run, in seconds.
 const RETRY_FIRST: u64 = 30 * 60;
 
-/// What one app's lookup came to. `Absent` means the server answered but has no manifest we can
-/// use (404, unreadable, wrong app): a successful check with nothing to offer. `Failed` means we
-/// could not ask (offline, timeout, server error): the cached answer stands and we retry soon.
+/// What one app's lookup came to. `Absent` means the server answered "not there" (404 or 410): a
+/// successful check with nothing to offer. `Failed` means we could not get an answer we can trust
+/// (offline, timeout, server error, or a 200 whose body is not a manifest, as a captive portal
+/// serves): the cached answer stands and we retry soon.
 enum Look {
     Found(Box<HubManifest>),
     Absent(String),
@@ -39,11 +44,11 @@ fn is_absent(reason: &str) -> bool {
 
 fn look(app: &CatalogApp, t: &dyn Transport) -> Look {
     let mut failed: Option<String> = None;
-    let mut absent = String::from("no hub.txt in the latest release");
+    let absent = String::from("no hub.txt in the latest release");
     match t.get(&app.latest_url("hub.txt"), MANIFEST_MAX, TIMEOUT) {
         Ok(bytes) => match manifest::parse(&bytes, app) {
             Ok(m) => return Look::Found(Box::new(m)),
-            Err(e) => absent = format!("hub.txt: {e}"),
+            Err(e) => failed = Some(format!("hub.txt: {e}")),
         },
         Err(e) if is_absent(&e) => {}
         Err(e) => failed = Some(e),
@@ -52,7 +57,7 @@ fn look(app: &CatalogApp, t: &dyn Transport) -> Look {
         match t.get(&app.latest_url(legacy), MANIFEST_MAX, TIMEOUT) {
             Ok(bytes) => match manifest::from_legacy(&bytes, app) {
                 Ok(m) => return Look::Found(Box::new(m)),
-                Err(e) => absent = format!("{legacy}: {e}"),
+                Err(e) => failed = Some(format!("{legacy}: {e}")),
             },
             Err(e) if is_absent(&e) => {}
             Err(e) => failed = Some(e),
@@ -87,7 +92,8 @@ fn cached(app: &CatalogApp, store: &Store) -> Option<Box<HubManifest>> {
 
 /// Check every app, two at a time. A manifest that was read is cached in the store (as the
 /// canonical hub.txt text); an app that could not be asked gets its cached manifest back, or
-/// `Unknown`. Records the time of the run and counts failed runs (a run where nothing answered).
+/// `Unknown`. Records the time of the run and counts failed runs (a run where any app could not
+/// be asked).
 pub fn check_all<'a>(
     apps: impl IntoIterator<Item = &'a CatalogApp>,
     t: &dyn Transport,
@@ -99,30 +105,29 @@ pub fn check_all<'a>(
     }
     let looks = look_all(&apps, t);
     let mut out = Vec::with_capacity(apps.len());
-    let mut answered = false;
+    let mut any_failed = false;
     for (app, look) in apps.iter().zip(looks) {
         let latest = match look {
             Look::Found(m) => {
-                answered = true;
                 store.set_cached_manifest(app.id, manifest::write(&m).as_bytes());
                 Latest::Found(m)
             }
-            Look::Absent(r) => {
-                answered = true;
-                Latest::NoManifest(r)
+            Look::Absent(r) => Latest::NoManifest(r),
+            Look::Failed(_) => {
+                any_failed = true;
+                match cached(app, store) {
+                    Some(m) => Latest::Found(m),
+                    None => Latest::Unknown,
+                }
             }
-            Look::Failed(_) => match cached(app, store) {
-                Some(m) => Latest::Found(m),
-                None => Latest::Unknown,
-            },
         };
         out.push((app.id, latest));
     }
     store.set_last_check(now());
-    store.set_failures(if answered {
-        0
-    } else {
+    store.set_failures(if any_failed {
         store.failures().saturating_add(1)
+    } else {
+        0
     });
     out
 }
@@ -256,8 +261,9 @@ mod tests {
     }
     impl Transport for Fake {
         fn get(&self, url: &str, max: usize, timeout: Duration) -> Result<Vec<u8>, String> {
-            assert_eq!(max, MANIFEST_MAX);
-            assert_eq!(timeout, TIMEOUT);
+            // The plan fixes these (launcher-plan.md): written out, not read from the constants.
+            assert_eq!(max, 64 * 1024);
+            assert_eq!(timeout, Duration::from_secs(10));
             self.asked.lock().unwrap().push(url.to_string());
             self.answers
                 .lock()
@@ -474,6 +480,108 @@ mod tests {
     }
 
     #[test]
+    fn a_410_is_an_answer_too() {
+        let t = Fake::default();
+        let store = Store {
+            dir: scratch("410"),
+        };
+        store.set_failures(3);
+        let a = sprawl();
+        t.set(a.latest_url("hub.txt"), Err("Status(410)".to_string()));
+        let out = check_all([a], &t, &store);
+        assert!(matches!(out[0].1, Latest::NoManifest(_)));
+        assert_eq!(store.failures(), 0);
+    }
+
+    #[test]
+    fn one_app_failing_among_answering_ones_makes_the_run_a_failed_one() {
+        let t = Fake::default();
+        let store = Store {
+            dir: scratch("partial"),
+        };
+        for a in crate::catalog::CATALOG.iter() {
+            t.set(a.latest_url("hub.txt"), Ok(hub_txt(a, "2.0.0")));
+        }
+        t.set(mdedit().latest_url("hub.txt"), Err("Timeout".to_string()));
+        let out = check_all(&crate::catalog::CATALOG, &t, &store);
+        assert_eq!(out[0].1, Latest::Unknown);
+        assert!(out[1..].iter().all(|(_, l)| matches!(l, Latest::Found(_))));
+        assert_eq!(store.failures(), 1);
+        // So the retry comes in half an hour, not after the interval.
+        let last = store.last_check().unwrap();
+        assert!(due(Some(last), last + 30 * 60, 24, store.failures()));
+    }
+
+    #[test]
+    fn a_200_that_is_not_a_manifest_is_a_failure_and_the_cache_stands() {
+        let t = Fake::default();
+        let store = Store {
+            dir: scratch("portal"),
+        };
+        let a = sprawl();
+        t.set(a.latest_url("hub.txt"), Ok(hub_txt(a, "3.1.0")));
+        check_all([a], &t, &store);
+        // A captive portal answers every URL with a login page.
+        t.set(a.latest_url("hub.txt"), Ok(b"<html>login</html>".to_vec()));
+        let out = check_all([a], &t, &store);
+        assert!(matches!(&out[0].1, Latest::Found(m) if m.version == ver("3.1.0")));
+        assert_eq!(store.failures(), 1);
+        // Nothing cached: Unknown, still a failure.
+        let fresh = Store {
+            dir: scratch("portal2"),
+        };
+        let out = check_all([a], &t, &fresh);
+        assert_eq!(out[0].1, Latest::Unknown);
+        assert_eq!(fresh.failures(), 1);
+    }
+
+    #[test]
+    fn a_network_failure_of_hub_txt_still_tries_the_legacy_file() {
+        let t = Fake::default();
+        let a = mdedit();
+        let legacy = a.legacy_manifest.unwrap();
+        t.set(a.latest_url("hub.txt"), Err("Timeout".to_string()));
+        t.set(a.latest_url(legacy), Ok(legacy_txt(a, "0.9.0")));
+        assert!(matches!(check_one(a, &t), Latest::Found(m) if m.version == ver("0.9.0")));
+        assert_eq!(t.count(), 2);
+    }
+
+    #[test]
+    fn a_404_then_a_network_error_on_the_legacy_file_is_a_failure_not_an_answer() {
+        let t = Fake::default();
+        let store = Store {
+            dir: scratch("legacy-fail"),
+        };
+        let a = mdedit();
+        let legacy = a.legacy_manifest.unwrap();
+        t.set(a.latest_url(legacy), Ok(legacy_txt(a, "0.9.0")));
+        check_all([a], &t, &store);
+        t.set(a.latest_url(legacy), Err("Timeout".to_string()));
+        let out = check_all([a], &t, &store);
+        assert!(matches!(&out[0].1, Latest::Found(m) if m.version == ver("0.9.0")));
+        assert_eq!(store.failures(), 1);
+    }
+
+    #[test]
+    fn last_check_is_the_time_of_the_attempt_even_when_nothing_answered() {
+        // The store holds one timestamp and the 30 minute retry is measured from it, so a failed
+        // run stamps it (and the label then says when we last tried).
+        let t = Fake::default();
+        let store = Store {
+            dir: scratch("attempt"),
+        };
+        let a = sprawl();
+        t.set(a.latest_url("hub.txt"), Err("Timeout".to_string()));
+        let before = now();
+        check_all([a], &t, &store);
+        let last = store.last_check().unwrap();
+        assert!(last >= before);
+        assert_eq!(store.failures(), 1);
+        assert!(!due(Some(last), last + 30 * 60 - 1, 24, 1));
+        assert!(due(Some(last), last + 30 * 60, 24, 1));
+    }
+
+    #[test]
     fn check_all_never_runs_more_than_two_requests_at_once() {
         struct Slow {
             now: AtomicUsize,
@@ -636,5 +744,13 @@ mod tests {
         assert_eq!(age_label(Some(0), 3 * 86_400), "Checked 3 days ago");
         // A clock that went backwards does not underflow.
         assert_eq!(age_label(Some(500), 100), "Checked just now");
+        // The edges of each unit.
+        assert_eq!(age_label(Some(0), 59), "Checked just now");
+        assert_eq!(age_label(Some(0), 3599), "Checked 59 minutes ago");
+        assert_eq!(age_label(Some(0), 3300), "Checked 55 minutes ago");
+        assert_eq!(age_label(Some(0), 86_399), "Checked 23 hours ago");
+        assert_eq!(age_label(Some(0), 100_000), "Checked 27 hours ago");
+        assert_eq!(age_label(Some(0), 172_799), "Checked 47 hours ago");
+        assert_eq!(age_label(Some(0), 172_800), "Checked 2 days ago");
     }
 }
