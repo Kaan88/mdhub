@@ -1,0 +1,15 @@
+hub: 1
+app: inbound
+version: 0.9.0
+date: 2026-11-17
+notes: Sites become Remote files: an All remotes page, two panes, copies between remotes, one-way sync with a preview.
+windows-x86_64.kind: setup
+windows-x86_64.exe: app\DownloadManager.Host.exe
+windows-x86_64.uninstall: {6F4B7C2E-3D91-4E8A-9B57-2C1D0A8E5F13}_is1
+windows-x86_64.wait: app\DownloadManager.Host.exe, app\DownloadManager.Desktop.WinUI.exe, app\DownloadManager.NativeHost.exe
+windows-x86_64.setup: InboundSetup-0.9.0.exe
+windows-x86_64.setup.url: https://github.com/Kaan88/inbound/releases/download/v0.9.0/InboundSetup-0.9.0.exe
+windows-x86_64.setup.sha256: cd496332e897774c6fe6a57aefaef6dfd2df0270c929c415b3aa869c863c1ac9
+windows-x86_64.setup.size: 72028167
+windows-x86_64.setup.silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER
+windows-x86_64.setup.scope: user

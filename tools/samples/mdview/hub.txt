@@ -1,0 +1,23 @@
+hub: 1
+app: mdview
+version: 1.0.4
+date: 2026-11-21
+notes: Leave out tabs you barely looked at, and Settings in categories.
+windows-x86_64.kind: files
+windows-x86_64.exe: mdview.exe
+windows-x86_64.uninstall: {B7E2F4A9-3D1C-4C58-A6E0-91D5C8F27B34}_is1
+windows-x86_64.wait: mdview-engine.exe
+windows-x86_64.file: mdview.exe
+windows-x86_64.file.url: https://github.com/Kaan88/markdown-viewer-rs/releases/download/v1.0.4/mdview.exe
+windows-x86_64.file.sha256: bcbf26fd20eea0fd3b3d6d88313e6529705bb74377419059f5e61e0c0601e369
+windows-x86_64.file.size: 9415680
+windows-x86_64.file2: mdview-engine.exe
+windows-x86_64.file2.url: https://github.com/Kaan88/markdown-viewer-rs/releases/download/v1.0.4/mdview-engine.exe
+windows-x86_64.file2.sha256: 17a839c670b6353e947972f6c3d1bd423de7cc7cd39cf3da1083e423f19450ac
+windows-x86_64.file2.size: 26292736
+windows-x86_64.setup: mdview-setup-1.0.4.exe
+windows-x86_64.setup.url: https://github.com/Kaan88/markdown-viewer-rs/releases/download/v1.0.4/mdview-setup-1.0.4.exe
+windows-x86_64.setup.sha256: d32499f2bb483eebe204dd5c51588972b576fbc04297f72a7126bb3b36459bfe
+windows-x86_64.setup.size: 11966778
+windows-x86_64.setup.silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+windows-x86_64.setup.scope: user

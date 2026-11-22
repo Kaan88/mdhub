@@ -1,0 +1,27 @@
+hub: 1
+app: mdedit
+version: 1.2.1
+date: 2026-11-21
+notes: An option to leave out tabs you barely looked at, and a tidier AI menu.
+windows-x86_64.kind: files
+windows-x86_64.exe: mdedit.exe
+windows-x86_64.uninstall: {C58A9AB1-8337-4056-9953-04E92C05F414}_is1
+windows-x86_64.wait: mdedit-ai.exe, mdview-engine.exe
+windows-x86_64.file: mdedit.exe
+windows-x86_64.file.url: https://github.com/Kaan88/markdown-editor-rs/releases/download/v1.2.1/mdedit-1.2.1-windows-x86_64.exe
+windows-x86_64.file.sha256: c14662b07889b9a0a55e59f3eb383c1f2c6d115690bb7b97c0e147b0b763fd5e
+windows-x86_64.file.size: 8403968
+windows-x86_64.file2: mdview-engine.exe
+windows-x86_64.file2.url: https://github.com/Kaan88/markdown-editor-rs/releases/download/v1.2.1/mdview-engine.exe
+windows-x86_64.file2.sha256: a2433a55aced240d3b1c6d3d3b114aec3d72f32cda95b842750141a8ce6ff5cd
+windows-x86_64.file2.size: 26291712
+windows-x86_64.file3: mdedit-ai.exe
+windows-x86_64.file3.url: https://github.com/Kaan88/markdown-editor-rs/releases/download/v1.2.1/mdedit-ai.exe
+windows-x86_64.file3.sha256: 0583c6ad91e21b4d72ff40ee5d5e24a1b8103b3f8640512c783a23e1870d0193
+windows-x86_64.file3.size: 2265600
+windows-x86_64.setup: mdedit-setup-1.2.1.exe
+windows-x86_64.setup.url: https://github.com/Kaan88/markdown-editor-rs/releases/download/v1.2.1/mdedit-setup-1.2.1.exe
+windows-x86_64.setup.sha256: 61d052cd43a4b77e2c62d7a5b4bfbab1a9c27bc6273e3e53dd21fc9524e879db
+windows-x86_64.setup.size: 12594139
+windows-x86_64.setup.silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+windows-x86_64.setup.scope: user

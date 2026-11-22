@@ -1,0 +1,14 @@
+hub: 1
+app: sprawl
+version: 1.0.5
+date: 2026-11-20
+notes: The AI can propose recognisers and cleaners through Codex and Claude Code, and Sprawl checks each one.
+windows-x86_64.kind: setup
+windows-x86_64.exe: sprawl.exe
+windows-x86_64.uninstall: Sprawl_is1
+windows-x86_64.setup: Sprawl-Setup-1.0.5.exe
+windows-x86_64.setup.url: https://github.com/Kaan88/sprawl/releases/download/v1.0.5/Sprawl-Setup-1.0.5.exe
+windows-x86_64.setup.sha256: a268e03bb2d0150bd8b8b5725b738b312218ebe99d7429099d62b9c488f60196
+windows-x86_64.setup.size: 5544567
+windows-x86_64.setup.silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+windows-x86_64.setup.scope: machine
