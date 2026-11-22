@@ -1,0 +1,136 @@
+# Design
+
+How each part is built, one section per part, written from reading the code. First screen:
+
+```
+                      catalog (4 apps, compiled in)
+                         |
+ transport ----> check ----> manifest (hub.txt)         state (Hub's own files)
+   (bytes)    what is new?    parse / from_legacy        installed.ini, settings.ini,
+      |            |                  |                   checks.ini, latest\<id>.txt, cache\
+      v            v                  v                          ^
+   install  <------ model (Installed, Latest, Row) ---- detect (what is on this PC)
+ (download, verify, place or run setup, launch, roll back)
+                         |
+ bins/hub:  glue (Engine: owns what Hub knows, runs work on threads, builds the Vm)
+            vm -> view / grid / panes / ui (draw a Vm, return a Layout of hit rects)
+            app (winit + softbuffer window), shot (--shot), demo (fake Vms), cli, trace
+```
+
+`hub-core` has no window and no thread of its own (workers are `bins/hub/src/work.rs`); the
+window draws a `Vm` and returns what a pointer can hit; `glue.rs` is the only place that joins
+them, so every behaviour is tested without a window.
+
+## catalog.rs
+Four `CatalogApp` constants: id, name, blurb, repository under `Kaan88`, exe (relative; Inbound's
+is `app\DownloadManager.Host.exe`), launch args (`--open` for Inbound), folder under
+`%LOCALAPPDATA%\Programs`, machine folder (Sprawl), Inno uninstall keys, `wait` (executables that
+must be gone before an install), the legacy manifest file name (mdedit, mdview), tile colour and
+glyph. `latest_url(file)` and `url_allowed(url)` (a manifest may name only
+`https://github.com/Kaan88/<repo>/releases/download/...`). Adding an app is an entry and a
+release of Hub.
+
+## model.rs
+The types the others share: `Installed {folder, exe, version, source, kind}` with `Source`
+(Hub's record, an uninstall entry, a folder), `Kind` (Setup, Files, Zip), `Scope` (User,
+Machine), `FileSpec`, `SetupSpec`, `PlatformEntry`, `HubManifest`, `Latest` (Unknown,
+NoManifest(reason), Found), and `Row`, one row's state for the window (NotInstalled, UpToDate,
+Update, External, Downloading, Verifying, Waiting, Failed, Done, NoInfo).
+
+## manifest.rs
+`parse(bytes, app)`: at most 16 KiB and 128 lines; `key: value` split at the first colon, both
+sides trimmed, `#` comments and blank lines ignored; `hub: 1` first; no duplicate keys; no unknown
+key (platform-prefixed keys of the six known platforms are kept: `windows-x86_64.kind`, `.exe`,
+`.file`..`.file9` with `.url/.sha256/.size`, `.zip`, `.setup` with `.silent/.scope`, `.uninstall`,
+`.min`, `.wait`, `.updates`); https only; every URL under the app's own releases, no `..`, `%`,
+`?`, `#`, `\`, `@`; lower-case 64-hex SHA-256; plain file names (no device names, no trailing dot);
+`exe` and `wait` relative with no `..`; `silent` from `[A-Za-z0-9 /=_.:-]`; the kind's own needs
+(a `setup` kind needs a setup, `files` needs a file and an exe); duplicate file names, compared
+case-insensitively, refused. Never indexes, unwraps or slices on input (release aborts on a
+panic). `from_legacy` (D-003) and `write` (a manifest back to text such that `parse(write(m)) ==
+m`; the tests and the samples use it).
+
+## state.rs
+`Store {dir}`, `Store::open()` (`$HUB_DATA`, else `%LOCALAPPDATA%\Hub`; created on demand),
+`Store::at(dir)` for tests. `installed.ini` (a section per app: folder, exe, version, kind, date),
+`settings.ini` (`view`, `interval_hours` default 6, `[skipped]`), `checks.ini` (last attempt,
+failure count), `latest\<id>.txt` (the cached manifest text, so the window has rows with no
+network), `cache\<id>-<version>` and a `rollback_dir`. Every read-modify-write holds
+`.hub.lock`, a stale lock is broken, temp files are named per process and write, and writes
+rename. A file over its limit or damaged reads as empty; nothing panics.
+
+## detect.rs
+The plan's 3.2 order: Hub's record (while its exe still exists), then the uninstall entries
+(`HKCU` and `HKLM`, native and `WOW6432Node`: `InstallLocation`, `DisplayVersion`), then the
+folders installers use (`<programs>\<folder>`, each Program Files `machine_folder`), then the exe's
+version resource (`GetFileVersionInfoW`, never by running it); the resource wins over the record
+and `DisplayVersion`. `Env` names where to look; `Env::custom` points it at scratch folders and a
+test registry path. `running(exe)` and `any_running` read the process list and compare full
+paths case-insensitively. `adopt` records a found install without touching the app. Windows
+calls are `#[cfg(windows)]` with a harmless stub elsewhere.
+
+## transport.rs
+`trait Transport { get(url, max_bytes, timeout) -> Result<Vec<u8>, String> }`. `Net` is
+`mdshared_fetch::fetch_file` (https only, redirects followed by hand, only a 200 counts).
+`FileRoot` stands in for github.com with a folder (`https://github.com/X/Y` reads `<root>/X/Y`;
+`..`, drive letters, device names, backslashes refused). `default_transport()` returns `FileRoot`
+when the `test-hooks` feature is on and `HUB_FETCH_ROOT` is set; a release has no such feature.
+Whole bodies in memory: D-005.
+
+## check.rs
+`check_one(app, t)`: GET `hub.txt` (64 KiB, 10 s); if absent and the app has a legacy manifest,
+one more GET and `from_legacy`; the answer is `Found`, or `NoManifest(reason)` (a wrong `app`, a
+parse error, a 404). `check_all` asks at most two at a time, caches successes in the store, sets
+the last attempt and the failure count, returns the cached row for a failed app. `due` and
+`next_due`: the interval (6 h, 0 = never) is measured from the last attempt; after a failed run
+retry in 30 minutes, doubling up to the interval; a clock that went backwards is due.
+`row_state(installed, latest, skipped)`: NotInstalled, UpToDate, Update (only if latest >
+installed; an unknown installed version is an Update), External (found, not recorded by Hub,
+until adopted), NoInfo. `age_label` ("Checked 4 minutes ago").
+
+## install.rs
+`install(app, manifest, current, store, transport, opts, progress)`. **Files**: every file is
+downloaded to `cache_dir` (`.part`), its size and SHA-256 checked, all of them, before anything
+is placed; staged beside the targets; `mdshared_app::selfupdate::swap_in`; the retired files kept
+in `rollback_dir` with a note. **Setup**: downloaded, verified, run with the manifest's silent
+arguments (a user scope as a plain process, a machine scope through `ShellExecuteExW` `runas`),
+waited on, the exit code read (0 is success), then re-detected and recorded. **Zip** is refused.
+Before placing, running programs (`wait` and the exe) are asked to close with `WM_CLOSE` through
+a `Closer` (a test supplies one), waiting up to 30 s, else `InstallError::Running`; never
+`TerminateProcess`. Every failure leaves the old version and deletes the bad download; `Cancel`
+is an `AtomicBool` read between files. `InstallError`: Unsupported, Invalid, Cancelled, Download,
+Mismatch (expected and received), Running, Io, Setup (with the exit code), NoRollback. `rollback` puts a Files install's retired
+files back. `launch` starts the exe detached, in its folder, with `launch_args`. Tests use small
+programs the test builds and a `SetupRunner`, never a real installer.
+
+## bins/hub: vm.rs, view.rs, grid.rs, panes.rs, ui.rs
+`Vm` is everything the window shows (apps with their `Row`, versions, date, size, notes, details;
+selection; view; offer bar; status text; a busy text); `draw(painter, palette, w, h, vm) ->
+Layout` paints the title row, command bar, the list or the grid (large tiles carry versions,
+status and one action; small tiles an icon, a name and one word), the pane under it ("What's
+new" and the details of the release) and the status bar, and returns every hit rect. Drawn with
+`mdshared-ui` (frameless title, buttons, theme `LIGHT`/`DARK`). Every number is a constant.
+
+## bins/hub: demo.rs, shot.rs
+`hub --shot out.png [--size WxH] [--scale N] [--light|--dark] [--view list|large|small] [--demo
+NAME]` renders a `Vm` with no window and no read of this PC. `demo.rs` builds the made-up Vms
+(`main, first-run, updating, failed, done, noinfo, running, banner, all, empty`); `tests/shots.sh`
+renders all of them. A shot is limited to 64 million pixels.
+
+## bins/hub: glue.rs, work.rs, app.rs, cli.rs, trace.rs
+Written after the pieces above, by another hand; read here only for their headers, not reviewed
+(STATE.md). `glue.rs`: the `Engine` that owns what Hub knows, turns a hit or a key into work, runs
+one install at a time on worker threads (`work.rs`) and builds the `Vm`; `HUB_PROGRAMS` /
+`HUB_PROGRAM_FILES` stand in for the programs folders and `HUB_FETCH_LOG` records the URLs asked
+for, both for tests. `app.rs`: winit and softbuffer, a frameless window, a loop that sleeps (no
+CPU at idle). `cli.rs`: `--behind --no-session --exit-after-ms --trace --demo --check-now --size
+--light/--dark --view`; `HUB_FIRST_CHECK_MS` sets the first check's delay (default 2 minutes).
+`trace.rs`: `--trace` prints stage times, memory and CPU time.
+
+## tools/
+`write-hub-txt.ps1` writes a `hub.txt` from a version, app, repository, notes and a list of files
+(name, role file|setup|zip, optional asset name, silent arguments, scope): SHA-256 and sizes from
+the files, URLs `https://github.com/Kaan88/<repo>/releases/download/v<version>/<asset>`, and
+refuses (exit 1, nothing written) whatever the parser would refuse. Windows PowerShell 5.1 and
+7. `make-samples.ps1` regenerates `tools/samples/<app>/hub.txt` from GitHub's own sizes and hashes
+of each project's latest release.
