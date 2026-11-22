@@ -447,3 +447,286 @@ fn catalog_glyph_names_resolve_to_icons() {
     }
     assert_eq!(ui::glyph_path("zzz"), mdshared_ui::glyph::DOC);
 }
+
+fn count(lay: &Layout, hit: Hit) -> usize {
+    lay.hits.iter().filter(|(_, h)| *h == hit).count()
+}
+
+fn lay_of(vm: &Vm, w: u32, h: u32) -> Layout {
+    draw_at(&mut Gfx::new(), &LIGHT, vm, w, h, 0.0).0
+}
+
+#[test]
+fn the_command_bar_offers_what_the_state_allows() {
+    let mut vm = demo::build("main", View::List).unwrap();
+    vm.updates = 2;
+    vm.busy = None;
+    vm.checked = "Checked just now".into();
+    let l = lay_of(&vm, 1280, 800);
+    assert_eq!(count(&l, Hit::UpdateAll), 1);
+    assert_eq!(count(&l, Hit::CheckNow), 1);
+    assert_eq!(count(&l, Hit::CancelAll), 0);
+    // Update all is only for when there is something to update.
+    vm.updates = 0;
+    assert_eq!(count(&lay_of(&vm, 1280, 800), Hit::UpdateAll), 0);
+    // While an install runs: Cancel all, and neither of the other two.
+    vm.updates = 2;
+    vm.busy = Some("Installing".into());
+    let l = lay_of(&vm, 1280, 800);
+    assert_eq!(count(&l, Hit::CancelAll), 1);
+    assert_eq!(count(&l, Hit::UpdateAll), 0);
+    assert_eq!(count(&l, Hit::CheckNow), 0);
+    // While a check runs there is nothing to press.
+    vm.busy = None;
+    vm.checked = "Checking\u{2026}".into();
+    let l = lay_of(&vm, 1280, 800);
+    assert_eq!(count(&l, Hit::CheckNow), 0);
+    assert_eq!(count(&l, Hit::UpdateAll), 1);
+}
+
+#[test]
+fn the_filter_box_is_there_from_900_and_the_view_switch_always() {
+    let vm = demo::build("main", View::List).unwrap();
+    assert_eq!(count(&lay_of(&vm, 900, 700), Hit::Filter), 1);
+    assert_eq!(count(&lay_of(&vm, 899, 700), Hit::Filter), 0);
+    for w in [640, 899, 1280] {
+        let l = lay_of(&vm, w, 700);
+        let sw: Vec<_> = l
+            .hits
+            .iter()
+            .filter_map(|(r, h)| match h {
+                Hit::ViewSwitch(v) => Some((*v, *r)),
+                _ => None,
+            })
+            .collect();
+        let views: Vec<_> = sw.iter().map(|(v, _)| *v).collect();
+        assert_eq!(views, VIEWS, "width {w}");
+        assert!(sw[0].1.x < sw[1].1.x && sw[1].1.x < sw[2].1.x);
+        for (v, r) in &sw {
+            assert_eq!(l.at(r.cx(), r.cy()), Hit::ViewSwitch(*v));
+        }
+    }
+}
+
+#[test]
+fn the_offer_bar_has_yes_no_and_a_close_that_means_no() {
+    let vm = demo::build("banner", View::List).unwrap();
+    let l = lay_of(&vm, 1280, 800);
+    let yes: Vec<_> = l
+        .hits
+        .iter()
+        .filter(|(_, h)| *h == Hit::BannerYes)
+        .collect();
+    let no: Vec<_> = l.hits.iter().filter(|(_, h)| *h == Hit::BannerNo).collect();
+    assert_eq!(yes.len(), 1);
+    assert_eq!(no.len(), 2, "the No button and the X");
+    assert!(!overlaps(yes[0].0, no[0].0) && !overlaps(yes[0].0, no[1].0));
+    // All of them sit in the bar, under the command bar.
+    for (r, _) in yes.iter().chain(no.iter()) {
+        assert!(r.y >= 40.0 + 44.0 - 0.01 && r.bottom() <= 40.0 + 44.0 + 34.0 + 0.01);
+    }
+    let r = yes[0].0;
+    assert_eq!(l.at(r.cx(), r.cy()), Hit::BannerYes);
+    // No banner, no hits.
+    let vm = demo::build("main", View::List).unwrap();
+    let l = lay_of(&vm, 1280, 800);
+    assert_eq!(count(&l, Hit::BannerYes) + count(&l, Hit::BannerNo), 0);
+}
+
+#[test]
+fn every_row_has_a_menu_in_the_list_and_the_large_grid_but_not_the_small() {
+    for (v, want) in [
+        (View::List, true),
+        (View::Large, true),
+        (View::Small, false),
+    ] {
+        let vm = demo::build("main", v).unwrap();
+        let l = lay_of(&vm, 1280, 800);
+        for i in 0..vm.apps.len() {
+            assert_eq!(count(&l, Hit::Menu(i)), usize::from(want), "{v:?} app {i}");
+        }
+    }
+}
+
+fn rows_y(l: &Layout) -> Vec<(usize, f32)> {
+    l.hits
+        .iter()
+        .filter_map(|(r, h)| match h {
+            Hit::Row(i) => Some((*i, r.y)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn scrolled_to_the_end_the_last_row_or_tile_sits_at_the_bottom_of_the_list() {
+    let mut gfx = Gfx::new();
+    for v in VIEWS {
+        let mut vm = demo::build("all", v).unwrap();
+        vm.sel = 99; // no pane: the list gets the whole room
+        let (w, h) = (860, 200);
+        let geo = view::geometry(w as f32, h as f32, &vm);
+        assert!(geo.max_scroll > 0.0, "{v:?}");
+        let (far, _) = draw_at(&mut gfx, &LIGHT, &vm, w, h, 1.0e9);
+        let (end, _) = draw_at(&mut gfx, &LIGHT, &vm, w, h, geo.max_scroll);
+        assert_eq!(
+            format!("{:?}", far.hits),
+            format!("{:?}", end.hits),
+            "{v:?}: more than the end is the end"
+        );
+        let last = vm.apps.len() - 1;
+        let (body, _) = far
+            .hits
+            .iter()
+            .find(|(_, h)| *h == Hit::Row(last))
+            .unwrap_or_else(|| panic!("{v:?}: the last app is not reachable"));
+        // The tile or row ends PAD (grid) or exactly (list) at the bottom edge.
+        let slack = geo.list.bottom() - body.bottom();
+        assert!((0.0..=12.01).contains(&slack), "{v:?}: slack {slack}");
+        assert!(
+            !far.hits.iter().any(|(_, h)| *h == Hit::Row(0)),
+            "{v:?}: the first is scrolled away"
+        );
+        // Nothing hittable pokes out of the list, whatever the scroll.
+        for s in [0.0, 37.0, geo.max_scroll / 2.0, 1.0e9] {
+            let (l, _) = draw_at(&mut gfx, &LIGHT, &vm, w, h, s);
+            for (r, hit) in &l.hits {
+                if matches!(hit, Hit::Row(_) | Hit::Action(..) | Hit::Menu(_)) {
+                    assert!(
+                        r.y >= geo.list.y + 28.0 - 0.01 && r.bottom() <= geo.list.bottom() + 0.01,
+                        "{v:?} scroll {s}: {hit:?} {r:?} leaves the list"
+                    );
+                }
+            }
+        }
+        // A scroll that is not a number is no scroll; a negative one too.
+        let (zero, _) = draw_at(&mut gfx, &LIGHT, &vm, w, h, 0.0);
+        for s in [f32::NAN, f32::NEG_INFINITY, -5.0] {
+            let (l, _) = draw_at(&mut gfx, &LIGHT, &vm, w, h, s);
+            assert_eq!(rows_y(&l), rows_y(&zero), "{v:?}: scroll {s}");
+        }
+        let (l, _) = draw_at(&mut gfx, &LIGHT, &vm, w, h, f32::INFINITY);
+        assert_eq!(rows_y(&l), rows_y(&zero), "{v:?}: infinite scroll is none");
+    }
+}
+
+#[test]
+fn grid_tiles_are_the_size_the_plan_says() {
+    use crate::grid::geometry;
+    let (c, w, h) = geometry(View::Large, 1280.0);
+    assert_eq!((c, h), (7, 196.0));
+    assert!(w >= 164.0);
+    let (c, w, h) = geometry(View::Large, 860.0);
+    assert_eq!((c, h), (4, 196.0));
+    assert!(w >= 164.0);
+    for width in [860.0, 1280.0] {
+        let (c, w, h) = geometry(View::Small, width);
+        assert!(c >= 7 && (width > 900.0 || c == 7), "small at {width}: {c}");
+        assert_eq!(h, 104.0);
+        assert!(w >= 108.0);
+    }
+    // Drawn: the first row of the grid holds exactly that many tiles.
+    let vm = demo::build("all", View::Large).unwrap();
+    let l = lay_of(&vm, 860, 700);
+    let y0 = rows_y(&l)[0].1;
+    assert_eq!(rows_y(&l).iter().filter(|(_, y)| *y == y0).count(), 4);
+    let vm = demo::build("all", View::Small).unwrap();
+    let l = lay_of(&vm, 860, 700);
+    let y0 = rows_y(&l)[0].1;
+    assert_eq!(rows_y(&l).iter().filter(|(_, y)| *y == y0).count(), 7);
+}
+
+#[test]
+fn the_narrow_tier_drops_installed_and_latest_and_the_pane_needs_a_selection() {
+    let c = view::cols(639.0);
+    assert!(c.installed == 0.0 && c.latest == 0.0 && c.released == 0.0 && c.size == 0.0);
+    let c = view::cols(640.0);
+    assert!(c.installed > 0.0 && c.latest > 0.0 && c.released == 0.0);
+    assert_eq!(PANE_MIN, 150.0, "the plan: a pane under 150 px is left out");
+    let mut vm = demo::build("main", View::List).unwrap();
+    let room = 40.0 + 44.0 + 26.0 + view::content_height(&vm, 1280.0) + 400.0;
+    assert!(view::geometry(1280.0, room, &vm).pane.h >= 400.0);
+    vm.sel = vm.apps.len();
+    assert_eq!(view::geometry(1280.0, room, &vm).pane.h, 0.0);
+    // The banner takes room from the list.
+    let vm = demo::build("banner", View::List).unwrap();
+    let plain = demo::build("main", View::List).unwrap();
+    let a = view::geometry(1280.0, 800.0, &vm);
+    let b = view::geometry(1280.0, 800.0, &plain);
+    assert_eq!(a.list.y - b.list.y, 34.0);
+}
+
+#[test]
+fn row_buttons_pane_tabs_and_arrows_follow_the_row() {
+    use crate::vm::Act;
+    let acts = |r: Row| {
+        row_actions(&one(r, true))
+            .iter()
+            .map(|b| b.act)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(acts(Row::External), [Act::Adopt, Act::Open]);
+    for r in [
+        Row::Downloading(0.1, String::new()),
+        Row::Verifying,
+        Row::Waiting(String::new()),
+    ] {
+        assert_eq!(acts(r), [Act::Cancel]);
+    }
+    assert_eq!(acts(Row::UpToDate), [Act::Open]);
+    assert_eq!(
+        row_actions(&one(Row::NotInstalled, false))[0].act,
+        Act::Install
+    );
+    let tab = |r: Row| crate::panes::tab_label(&r);
+    assert_eq!(tab(Row::Failed(String::new())), "What happened");
+    assert_eq!(tab(Row::Verifying), "Progress");
+    assert_eq!(tab(Row::Downloading(0.0, String::new())), "Progress");
+    assert_eq!(tab(Row::Waiting(String::new())), "Progress");
+    assert_eq!(tab(Row::NoInfo(String::new())), "Why");
+    assert_eq!(tab(Row::Update), "What's new");
+    assert_eq!(tab(Row::UpToDate), "What's new");
+    for r in [Row::Update, Row::Verifying, Row::Failed(String::new())] {
+        assert!(view::newer(&r), "{r:?}");
+    }
+    for r in [
+        Row::UpToDate,
+        Row::NotInstalled,
+        Row::External,
+        Row::Done(String::new()),
+    ] {
+        assert!(!view::newer(&r), "{r:?}");
+    }
+}
+
+#[test]
+fn cap_cuts_at_n_characters_not_bytes() {
+    assert_eq!(ui::cap("abcdef", 3), "abc");
+    assert_eq!(ui::cap("abc", 3), "abc");
+    assert_eq!(ui::cap("\u{e9}\u{e9}\u{e9}", 2), "\u{e9}\u{e9}");
+    assert_eq!(ui::cap(&"x".repeat(1000), 200).len(), 200);
+    assert_eq!(ui::cap("abc", 0), "");
+}
+
+#[test]
+fn the_list_wants_its_head_and_its_rows() {
+    let vm = demo::build("main", View::List).unwrap();
+    let n = vm.apps.len() as f32;
+    assert_eq!(view::content_height(&vm, 1280.0), 28.0 + n * 52.0);
+    assert_eq!(lay_of(&vm, 1280, 800).list_content_h, 28.0 + n * 52.0);
+    let vm = demo::build("empty", View::List).unwrap();
+    assert_eq!(view::content_height(&vm, 1280.0), 28.0 + 80.0);
+}
+
+#[test]
+fn a_shot_of_more_than_64_million_pixels_is_refused() {
+    let s = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let big = ["--shot", "o.png", "--size", "16384x16384", "--scale", "4"];
+    assert!(shot::parse(&s(&big)).is_err());
+    let swapped = ["--shot", "o.png", "--scale", "4", "--size", "16384x16384"];
+    assert!(shot::parse(&s(&swapped)).is_err());
+    assert!(shot::parse(&s(&["--shot", "o.png", "--size", "16384x16384"])).is_err());
+    let fine = ["--shot", "o.png", "--size", "4000x3000", "--scale", "2"];
+    assert!(shot::parse(&s(&fine)).is_ok());
+    assert_eq!(shot::run(&s(&big)), 2);
+}

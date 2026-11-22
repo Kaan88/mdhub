@@ -10,6 +10,16 @@ use mdshared_ui::theme::Palette;
 
 const PAD: f32 = 20.0;
 
+/// The pane's one tab, by what the row is doing.
+pub fn tab_label(row: &Row) -> &'static str {
+    match row {
+        Row::Failed(_) => "What happened",
+        Row::Downloading(..) | Row::Verifying | Row::Waiting(_) => "Progress",
+        Row::NoInfo(_) => "Why",
+        _ => "What's new",
+    }
+}
+
 pub fn draw(p: &mut Painter, pal: &Palette, r: Rect, vm: &Vm) {
     p.fill(r, pal.pane);
     let px = p.px().max(1.0);
@@ -20,12 +30,7 @@ pub fn draw(p: &mut Painter, pal: &Palette, r: Rect, vm: &Vm) {
     let old = p.clip(r);
     // The tab strip: one tab for now.
     let cy = r.y + PANE_TAB_H / 2.0 + 1.0;
-    let label = match a.row {
-        Row::Failed(_) => "What happened",
-        Row::Downloading(..) | Row::Verifying | Row::Waiting(_) => "Progress",
-        Row::NoInfo(_) => "Why",
-        _ => "What's new",
-    };
+    let label = tab_label(&a.row);
     let wd = p.measure(Face::Semibold, 13.0, label);
     p.text(Face::Semibold, 13.0, r.x + 16.0, cy, label, pal.text, 200.0);
     p.fill(

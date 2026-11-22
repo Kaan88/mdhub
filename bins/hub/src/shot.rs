@@ -8,6 +8,9 @@ use mdshared_ui::gfx::{Gfx, Painter};
 use mdshared_ui::theme::{DARK, LIGHT, Palette};
 use std::path::Path;
 
+/// The most pixels a shot may have (a 4-byte bitmap of this is 256 MB).
+pub const MAX_PIXELS: f64 = 64.0e6;
+
 pub struct Args {
     pub out: String,
     pub size: (u32, u32),
@@ -64,6 +67,10 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
     }
     if a.out.is_empty() {
         return Err("--shot needs a file".into());
+    }
+    let px = a.size.0 as f64 * a.size.1 as f64 * (a.scale as f64).powi(2);
+    if px > MAX_PIXELS {
+        return Err("--size and --scale ask for more than 64 million pixels".into());
     }
     Ok(a)
 }
