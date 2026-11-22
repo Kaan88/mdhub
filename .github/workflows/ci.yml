@@ -1,0 +1,57 @@
+# Checks on every push to main and every pull request: formatting, clippy (warnings are errors),
+# the tests, and the headless screenshot suite as a smoke test. Windows only for now: the window
+# and every OS call are Windows code; the rest builds elsewhere but is not checked there yet.
+# See docs/CODE.md. Not run yet: the repository has not been pushed (docs/RELEASE.md).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_TOOLCHAIN: 1.99.1
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows
+      - run: cargo fmt --all --check
+      - run: cargo clippy --release --workspace --all-targets -- -D warnings
+      - run: cargo test --release --workspace --no-fail-fast
+      # The test hooks (HUB_FETCH_ROOT, HUB_CATALOG) only in the tests, never in a release build.
+      - run: cargo clippy --release -p hub --features test-hooks --all-targets -- -D warnings
+      - name: Screenshot suite (smoke test)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          cargo build --release -p hub
+          bash tests/shots.sh target/shots
+          bash tests/shots-check.sh target/shots
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: shots-windows
+          path: target/shots/*.png
+          if-no-files-found: warn
+          retention-days: 14
