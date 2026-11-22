@@ -1958,4 +1958,74 @@ windows-x86_64.tool.sha256: {}
             poke(s.as_bytes());
         }
     }
+
+    /// `tools/write-hub-txt.ps1` writes the file every app's release carries, and repeats this
+    /// parser's checks so that a bad release fails in its workflow. What it writes must be read
+    /// here, and what would not be read it must refuse: a `hub.txt` the script was happy with and
+    /// Hub is not is a release nobody can install from.
+    #[cfg(windows)]
+    #[test]
+    fn the_release_script_writes_only_what_this_parser_reads() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let dir = std::env::temp_dir().join(format!("hub-script-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let files = dir.join("files.json");
+        std::fs::write(
+            &files,
+            format!(
+                r#"[{{"Name":"mdedit.exe","Sha256":"{}","Size":5}}]"#,
+                h("a")
+            ),
+        )
+        .unwrap();
+        let out = dir.join("hub.txt");
+        let run = |exe: &str, notes: &str| -> Option<Vec<u8>> {
+            let _ = std::fs::remove_file(&out);
+            let st = std::process::Command::new("powershell.exe")
+                .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+                .arg(root.join("tools").join("write-hub-txt.ps1"))
+                .args([
+                    "-App",
+                    "mdedit",
+                    "-Repo",
+                    "markdown-editor-rs",
+                    "-Version",
+                    "1.2.3",
+                ])
+                .args(["-Kind", "files", "-Exe", exe, "-Notes", notes, "-FilesJson"])
+                .arg(&files)
+                .arg("-Out")
+                .arg(&out)
+                .output()
+                .expect("powershell.exe runs");
+            st.status
+                .success()
+                .then(|| std::fs::read(&out).expect("the file it said it wrote"))
+        };
+        // The plain case.
+        let text = run("mdedit.exe", "Faster.").expect("a plain release is written");
+        let m = parse(&text, app("mdedit")).expect("and read");
+        assert_eq!(m.notes, "Faster.");
+        // Notes are limited in bytes here, not in characters: 700 two-byte letters are 1400 bytes.
+        let long = "\u{e9}".repeat(700);
+        let text = run("mdedit.exe", &long).expect("long notes are cut, not refused");
+        let m = parse(&text, app("mdedit")).expect("notes the script kept are notes Hub reads");
+        assert!(m.notes.len() <= MAX_NOTES && m.notes.starts_with('\u{e9}'));
+        // A path with a space is not a plain relative path here: the script must say so.
+        assert!(
+            run(r"my app\mdedit.exe", "x").is_none(),
+            "a path Hub refuses was written"
+        );
+        assert!(
+            parse(
+                String::from_utf8_lossy(&text)
+                    .replace("exe: mdedit.exe", r"exe: my app\mdedit.exe")
+                    .as_bytes(),
+                app("mdedit")
+            )
+            .is_err()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
