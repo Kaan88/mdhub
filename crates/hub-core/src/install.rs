@@ -240,7 +240,7 @@ fn make_record(folder: &Path, exe: &Path, version: &str, kind: &str, date: &str)
     Record {
         folder: folder.to_path_buf(),
         exe: exe.to_path_buf(),
-        version: version.to_string(),
+        version: Version::parse(version).ok(),
         kind: kind.to_string(),
         date: date.to_string(),
     }
@@ -554,7 +554,7 @@ fn install_files(
     // The files are in place: failing to write the note must not turn that into a failed install
     // (the next check finds the app and offers the update again, which is harmless).
     let rec = make_record(&folder, &exe, &m.version.to_string(), "files", &m.date);
-    _ = store.save_installed(app.id, &rec);
+    store.save_installed(app.id, &rec);
     Ok(Installed {
         folder,
         exe,
@@ -749,7 +749,7 @@ fn install_setup(
         "setup",
         &m.date,
     );
-    _ = store.save_installed(app.id, &rec);
+    store.save_installed(app.id, &rec);
     Ok(Installed {
         version: Some(m.version.clone()),
         source: Source::Hub,
@@ -868,9 +868,7 @@ pub fn rollback_with(
         .map(|v| v.to_string())
         .unwrap_or_default();
     let rec = make_record(&note.folder, &note.exe, &version_text, "files", "");
-    store
-        .save_installed(app.id, &rec)
-        .map_err(|e| io_err("recording the roll back", e))?;
+    store.save_installed(app.id, &rec);
     _ = selfupdate::remove_any(&rb);
     progress(Progress::Finished);
     Ok(Installed {
@@ -1456,11 +1454,11 @@ mod tests {
         let existing = Record {
             folder: rig.folder(),
             exe: rig.folder().join("fake.exe"),
-            version: "1.0.0".into(),
+            version: Version::parse("1.0.0").ok(),
             kind: "setup".into(),
             date: "x".into(),
         };
-        rig.store.save_installed("fake", &existing).unwrap();
+        rig.store.save_installed("fake", &existing);
         std::fs::create_dir_all(rig.folder()).unwrap();
         std::fs::write(rig.folder().join("fake.exe"), b"old").unwrap();
         let runner = Arc::new(FakeRunner {
@@ -1617,7 +1615,10 @@ mod tests {
             ["fake.exe"],
             "the file v2 added is gone, nothing left over"
         );
-        assert_eq!(rig.store.load_installed("fake").unwrap().version, "1.0.0");
+        assert_eq!(
+            rig.store.load_installed("fake").unwrap().version,
+            Version::parse("1.0.0").ok()
+        );
         assert_eq!(
             rollback(&APP, &rig.store),
             Err(InstallError::NoRollback),
@@ -2273,7 +2274,7 @@ mod tests {
             "files",
             "",
         );
-        _ = rig.store.save_installed("fake", &rec);
+        rig.store.save_installed("fake", &rec);
         rb
     }
 
@@ -2434,7 +2435,7 @@ mod tests {
             "setup",
             "x",
         );
-        _ = rig.store.save_installed("fake", &rec);
+        rig.store.save_installed("fake", &rec);
         rec
     }
 
