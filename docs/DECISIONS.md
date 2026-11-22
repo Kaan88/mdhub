@@ -144,3 +144,28 @@ A copy that is not installed never asks for Hub's manifest.
 ## D-023 The settings card shows all three groups at once
 General, Updates and About are all visible at once; the category list marks a group but no page
 is swapped (the mock has pages). Would change: if the card grows past one screen.
+
+## D-024 The icon has one drawing: `icon.rs`; `assets/hub.ico` is packed from it
+The mark is a white hub joined by spokes to four nodes in the apps' colours (mdedit blue, mdview
+teal, Sprawl orange, Inbound green: its teal pushed to green so two nodes do not read as one app
+twice) on a dark indigo tile with a lighter rim, laid out in whole device pixels and mirrored, so
+16 px is sharp. `tools/make-icon.ps1` runs the ignored test `icon::tests::dump_the_icon_sizes`
+and packs its ten sizes as PNG entries; it draws nothing itself, so the file and the tray icon
+cannot drift apart (before, System.Drawing and the painter each drew their own). Cost: the script
+needs cargo, and the repository carries one `#[ignore]`d test that is a generator. With a count,
+the badge takes the place of the fourth node. Replaces the blue tile with the download arrow.
+Would change: an owner who wants another mark, or an icon file drawn by hand.
+
+## D-025 The offer bar's yes is for one install; a question with no window opens one
+"Close and update" lets the install it starts close the app, and nothing after it: the consent
+goes when that install is cancelled or never queued, and the bar goes when its app is queued
+another way. When the engine asks and there is no window (Update all in the tray menu with an
+app open, a queued update whose app was opened meanwhile), the shell makes the window, since
+only the bar can ask; closing the window on the question is "Not now". Refines D-010 and D-018.
+Would change: an owner who prefers a balloon to a window appearing.
+
+## D-026 A roll back is not started while its app is open
+The bar asks about updates only, so a roll back of an open app says "Close <app> first, then roll
+back" and starts nothing (at the click, and again at its turn in the queue). Before, it was the
+one path that posted `WM_CLOSE` to an open app without a yes. Refines D-010 and D-012. Would
+change: a bar that can ask about a roll back too.

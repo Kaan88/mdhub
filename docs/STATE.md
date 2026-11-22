@@ -4,8 +4,9 @@ Rewritten, never appended to. What is true now; `git log` is the story.
 
 ## Released
 
-Nothing. No release, no tag, no pushed repository, no GitHub repository, `ci` never run
-(`docs/RELEASE.md`). The owner has not asked for a release.
+Nothing. No release, no tag (`docs/RELEASE.md`). The repository `Kaan88/mdhub` exists and `main`
+was pushed there up to the installer work; the icon and the review fixes after it are local
+only. Whether `ci` has run there was not looked at. The owner has not asked for a release.
 
 ## On `main`, committed
 
@@ -21,12 +22,22 @@ Nothing. No release, no tag, no pushed repository, no GitHub repository, `ci` ne
   balloon per check that found something (D-021); the icon is re-added on `TaskbarCreated`.
 - Start with Windows (Run key, off by default; only for an installed exe, D-020).
 - Self-update (D-022): checked first, staged, swapped last, restart. Works only for an installed
-  copy; nothing installs Hub yet, so it has run only on a scratch copy of the exe.
+  copy; the installer has not been run, so it has run only on a scratch copy of the exe.
+- The installer (`packaging/windows/hub.iss`, Inno, per user) and the workflows `ci` and
+  `release`: written, the installer never built or run here, `release` never run.
+- The icon (D-024): a white hub and four nodes in the apps' colours on a dark tile, drawn only
+  in `icon.rs`; `assets/hub.ico` is packed from it by `tools/make-icon.ps1`.
+- Closing an app (D-025, D-026): the offer bar's yes covers one install; a roll back of an open
+  app is not started; a question with no window opens the window.
 - Settings card: start with Windows, tray, notifications, check interval, update Hub.
 - Verified 2026-11-22 on this PC: `cargo fmt --all --check` clean; `cargo clippy --workspace
   --all-targets -D warnings` clean with and without `--features hub/test-hooks`; `cargo test
-  --workspace` 114 (hub) + 180 (hub-core, 1 ignored), same with test-hooks; no `HKCU\Software\HubTest`
-  left behind. Shots: 156 PNGs, check clean.
+  --workspace` 123 (hub, 1 ignored: the icon generator) + 183 (hub-core, 1 ignored), same with
+  test-hooks; no `HKCU\Software\HubTest` left behind. Shots: 156 PNGs, check clean.
+- Reviewed 2026-11-22, the whole repository: 36 safety rules were removed one at a time (hash and
+  size checks, URL pins, the Run value's quoting, asking before closing, one install at a time);
+  33 failed a test, 2 had none and got one, 1 is covered by a second check. 200,000 mutated
+  manifests, ini files and roll back notes: no panic. The defects found are fixed (`git log`).
 - Budgets measured (release, `--behind`, fresh `HUB_DATA`, 11 runs unless noted):
   | | now | budget | before the tray work |
   |---|---|---|---|
@@ -36,19 +47,25 @@ Nothing. No release, no tag, no pushed repository, no GitHub repository, `ci` ne
   | tray only after 20 open/close cycles | 5.1 to 5.9 MiB, flat at the end | < 8 MiB | none |
   | window open during the cycles | 9.4 to 10.2 MiB | < 30 MiB | none |
   | idle CPU over 10 s, tray only / window open | 0 ms / 0 ms | none | 0 |
-  | exe size | 3,400,704 bytes | none | 3.18 MB |
+  | exe size | 3,441,664 bytes (after the icon and the fixes) | none | 3.18 MB |
   The first frame was measured with `--demo main` (no engine work on the path). A real
   window-first start without `--demo` was not timed here (it needs a test-hooks build and a fake
   github root); the integrator's 212 to 244 ms for it is not reproduced and not explained here.
+  The times and memory were NOT measured again after the icon and the review fixes: the icon is
+  drawn once per change of the count, never per frame, and the fixes add nothing to the launch
+  path, but that is reasoning, not a measurement.
 
 ## What does not exist
 
-- **Seen live: nothing.** The balloon, the icon with its badge, the tray menu, an Explorer
+- **Seen live: nothing.** The new icon was looked at on a contact sheet (16 to 256 px, light and
+  dark, with and without a badge), not in the tray. The balloon, the icon with its badge, the tray menu, an Explorer
   restart, a click in the settings card were not seen or used by a person. The tray starts and
   stops, the window opens and closes 20 times by message here, and the card is checked by tests
   and shots only. Routing of mouse, keyboard and wheel into the card (`app.rs`) is compiled and
   read, not exercised.
-- Hub's installer and release workflow; a repository for Hub (`mdhub` is a working name).
+- The window made because the offer bar asks (D-025): its wiring in `app.rs` has no test (it
+  needs a window); the rule and the engine's side have.
+- A use for the manifest's `.min`, `.uninstall` and `.updates`: they are parsed and ignored.
 - "Swap at next start" for a downloaded Hub: it is swapped at "Restart now" or at quit, else
   deleted by `clean_up` at the next start and fetched again.
 - Streaming downloads with resume, free-space check (D-005): downloads are whole bodies in memory.
@@ -67,8 +84,16 @@ Nothing. No release, no tag, no pushed repository, no GitHub repository, `ci` ne
   updates dark 1280x800, settings about dark 860x600, banner list light 860x600); no tray menu
   shot exists (the menu is the system's, covered by tests only).
 - The ci workflow has never run; its Windows job and the pinned toolchain `1.99.1` are unproven.
-- Apps' manifest URLs (`manifest.rs`) were not checked for the dot-segment weakness that Hub's own
-  pin had; only Hub's self-update pin was fixed.
+- Quitting Hub ("Quit Hub", `--quit`) during an install waits 8 seconds for it and then ends the
+  process: an install caught while placing files is cut off there (the next start finds what is
+  on disk; `.old` files may stay beside the app until it cleans up itself).
+- A setup runs from Hub's cache folder, which this user can write to, also when it is elevated:
+  the file is locked and hashed just before, but the folder is not protected.
+- `HUB_UPDATE_MANIFEST` lifts the pin on Hub's own downloads, in a release build too (D-022).
+- Only the app's main exe is looked at before asking "close it?": a helper of its `wait` list
+  running alone is sent `WM_CLOSE` by the install without a question.
+- A setup that installs into another folder than the one on record is reported as "still the
+  same version" (the record's exe is found first). Not seen; read from the code.
 - Inbound's `latest` is fragile (`android-v0.0.9` newer than `v0.9.0`); see `docs/APP-CHANGES.md`.
 - Until each app's next release carries `hub.txt`, Sprawl and Inbound show "no release
   information"; mdedit and mdview are read through the stopgap (D-003).

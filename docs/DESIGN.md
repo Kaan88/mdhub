@@ -126,13 +126,19 @@ for, both for tests. `app.rs`: winit and softbuffer, a frameless window, a loop 
 CPU at idle). `cli.rs`: `--behind --no-session --exit-after-ms --trace --demo --check-now --size
 --light/--dark --view`; `HUB_FIRST_CHECK_MS` sets the first check's delay (default 2 minutes).
 `trace.rs`: `--trace` prints stage times, memory and CPU time.
+Closing an app: an install of an open app waits for the offer bar's yes, which covers that one
+install only (D-025); a roll back of an open app is not started (D-026); when the bar asks and
+there is no window, `app.rs` makes one (`tray::wants_window`), and closing it answers "Not now".
+A check is told which version of Hub is already downloaded; the engine remembers what it told
+(`Own::told_ready`) and shows "Downloading" only for a download the check really makes.
 
 ## tools/
 `write-hub-txt.ps1` writes a `hub.txt` from a version, app, repository, notes and a list of files
 (name, role file|setup|zip, optional asset name, silent arguments, scope): SHA-256 and sizes from
 the files, URLs `https://github.com/Kaan88/<repo>/releases/download/v<version>/<asset>`, and
 refuses (exit 1, nothing written) whatever the parser would refuse. Windows PowerShell 5.1 and
-7. `make-samples.ps1` regenerates `tools/samples/<app>/hub.txt` from GitHub's own sizes and hashes
+7. A test (`manifest::tests::the_release_script_writes_only_what_this_parser_reads`) runs it under
+`powershell.exe` and parses what it wrote. `make-samples.ps1` regenerates `tools/samples/<app>/hub.txt` from GitHub's own sizes and hashes
 of each project's latest release.
 
 ## autostart.rs (hub-core)
