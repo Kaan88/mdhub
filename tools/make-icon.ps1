@@ -1,6 +1,6 @@
 # Draws assets/hub.ico (a blue rounded tile with a white download arrow). Run from the repo root.
 Add-Type -AssemblyName System.Drawing
-function Make([int]$s){
+function Draw([int]$s){
   $b = New-Object System.Drawing.Bitmap $s,$s
   $g = [System.Drawing.Graphics]::FromImage($b); $g.SmoothingMode='AntiAlias'; $g.Clear([System.Drawing.Color]::Transparent)
   $r = [int]($s*0.22); $d=2*$r
@@ -12,9 +12,17 @@ function Make([int]$s){
   [System.Drawing.PointF[]]$pts = @([System.Drawing.PointF]::new([single]($s*0.32),[single]($s*0.46)),[System.Drawing.PointF]::new($cx,[single]($s*0.64)),[System.Drawing.PointF]::new([single]($s*0.68),[single]($s*0.46)))
   $g.DrawLines($pen,$pts)
   $g.DrawLine($pen,[single]($s*0.28),[single]($s*0.78),[single]($s*0.72),[single]($s*0.78))
-  $ms = New-Object System.IO.MemoryStream; $b.Save($ms,[System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $b.Dispose(); ,$ms.ToArray()
+  $g.Dispose(); $b
 }
-$sizes=16,32,48,256; $imgs = @($sizes | ForEach-Object { ,(Make $_) })
+# Drawn at 4x and scaled down with a high-quality filter, so small sizes keep clean edges.
+function Make([int]$s){
+  $big = Draw ($s*4)
+  $b = New-Object System.Drawing.Bitmap $s,$s
+  $g = [System.Drawing.Graphics]::FromImage($b); $g.InterpolationMode='HighQualityBicubic'; $g.PixelOffsetMode='HighQuality'; $g.CompositingMode='SourceCopy'
+  $g.DrawImage($big,0,0,$s,$s); $g.Dispose(); $big.Dispose()
+  $ms = New-Object System.IO.MemoryStream; $b.Save($ms,[System.Drawing.Imaging.ImageFormat]::Png); $b.Dispose(); ,$ms.ToArray()
+}
+$sizes=16,20,24,32,40,48,64,96,128,256; $imgs = @($sizes | ForEach-Object { ,(Make $_) })
 $out = New-Object System.IO.MemoryStream; $w = New-Object System.IO.BinaryWriter $out
 $w.Write([uint16]0); $w.Write([uint16]1); $w.Write([uint16]$sizes.Count)
 $off = 6 + 16*$sizes.Count

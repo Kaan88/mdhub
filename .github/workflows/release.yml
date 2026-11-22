@@ -95,7 +95,7 @@ jobs:
           )
           $global:LASTEXITCODE = 0
           # In-process (&), not a child pwsh: the file list is hashtables, which a child would get as text.
-          & ./tools/write-hub-txt.ps1 -App hub -Repo hub-rs -Version $v -Notes $notes -Kind files -Exe hub.exe -Uninstall '{A3D5E8C1-7B42-4F96-8E1D-5C0B2F7A9D64}_is1' -Files $files -Out dist/hub.txt
+          & ./tools/write-hub-txt.ps1 -App hub -Repo mdhub -Version $v -Notes $notes -Kind files -Exe hub.exe -Uninstall '{A3D5E8C1-7B42-4F96-8E1D-5C0B2F7A9D64}_is1' -Files $files -Out dist/hub.txt
           if ($LASTEXITCODE) { throw 'write-hub-txt failed' }
 
       - name: Check every hash against the files

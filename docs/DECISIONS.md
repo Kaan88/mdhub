@@ -133,7 +133,7 @@ tooltip count Hub's too.
 
 ## D-022 Self-update: Hub's own `hub-update.txt`, checked first, swapped last
 Format 1 of the shared updater, `uninstall_key` None, `HUB_UPDATE_MANIFEST` honoured. The URL
-is one constant, `selfupdate::MANIFEST_URL` (`Kaan88/hub-rs`, a working name: plan question 1 is
+is one constant, `selfupdate::MANIFEST_URL` (`Kaan88/mdhub`, renamed from the working name hub-rs: plan question 1 is
 unanswered). Downloads are pinned under the repository's releases path with no dot segments or
 encoded separators. The exe is staged as `hub.exe.new`; the swap happens only on "Restart now" or
 at quit, and only when no install runs (else deferred until the installs finish); `swap_in` puts

@@ -11,7 +11,7 @@ param(
     [string]$Notes = '',
     [Parameter(Mandatory)][string]$Exe,
     [Parameter(Mandatory)][string]$AssetName,
-    [string]$Repo = 'hub-rs',
+    [string]$Repo = 'mdhub',
     [Parameter(Mandatory)][string]$Out
 )
 $ErrorActionPreference = 'Stop'

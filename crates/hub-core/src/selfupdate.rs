@@ -22,7 +22,7 @@ use std::time::Duration;
 /// Hub's own manifest: the one place that names Hub's repository (a working name until the
 /// owner names it). The pin on every download URL ([`releases_prefix`]) is cut from it.
 pub const MANIFEST_URL: &str =
-    "https://github.com/Kaan88/hub-rs/releases/latest/download/hub-update.txt";
+    "https://github.com/Kaan88/mdhub/releases/latest/download/hub-update.txt";
 /// Names another manifest, to try a release before it is the latest (the shared rule).
 pub const MANIFEST_ENV: &str = "HUB_UPDATE_MANIFEST";
 
@@ -250,8 +250,8 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    const BASE: &str = "https://github.com/Kaan88/hub-rs/releases/";
-    const MURL: &str = "https://github.com/Kaan88/hub-rs/releases/latest/download/hub-update.txt";
+    const BASE: &str = "https://github.com/Kaan88/mdhub/releases/";
+    const MURL: &str = "https://github.com/Kaan88/mdhub/releases/latest/download/hub-update.txt";
 
     struct Fake {
         files: Mutex<HashMap<String, Vec<u8>>>,
@@ -353,7 +353,7 @@ mod tests {
         assert!(a.engine.is_none() && a.extras.is_empty() && a.uninstall_key.is_none());
         assert_eq!(
             releases_prefix(),
-            "https://github.com/Kaan88/hub-rs/releases/"
+            "https://github.com/Kaan88/mdhub/releases/"
         );
         assert!(a.current_version() >= Version::parse("0.1.0").unwrap());
     }
@@ -465,8 +465,7 @@ mod tests {
             extras: &[],
             uninstall_key: None,
         };
-        let trial =
-            "https://github.com/Kaan88/hub-rs/releases/download/v0.2.0-trial/hub-update.txt";
+        let trial = "https://github.com/Kaan88/mdhub/releases/download/v0.2.0-trial/hub-update.txt";
         let url = format!("{BASE}download/v0.2.0-trial/hub.exe");
         let fake = Fake::new();
         fake.put(trial, manifest("0.2.0", &url, &"b".repeat(64)).as_bytes());

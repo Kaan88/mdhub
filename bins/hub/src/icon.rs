@@ -129,9 +129,16 @@ pub fn small_icon_side() -> u32 {
 /// small icon size. The caller owns it: [`destroy`] it when it is replaced or the icon is gone.
 #[cfg(windows)]
 pub fn hicon(count: u32) -> isize {
+    hicon_sized(small_icon_side(), count)
+}
+
+/// Like [`hicon`] at `side` pixels (8 to 256): the notification balloon takes a large one, so that
+/// Windows does not stretch the 16-pixel tray icon into its toast and blur it.
+#[cfg(windows)]
+pub fn hicon_sized(side: u32, count: u32) -> isize {
     use windows_sys::Win32::Graphics::Gdi::{CreateBitmap, DeleteObject};
     use windows_sys::Win32::UI::WindowsAndMessaging::{CreateIconIndirect, ICONINFO};
-    let side = small_icon_side();
+    let side = side.clamp(8, 256);
     let bgra = render(side, count);
     let mask = vec![0u8; (side as usize).div_ceil(16) * 2 * side as usize];
     // SAFETY: both buffers are at least as large as the bitmaps they describe (32 bits a pixel,
@@ -174,6 +181,33 @@ pub fn destroy(h: isize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The balloon's icon is a real 256-pixel one, not the tray's 16 stretched: it has an
+    /// opaque tile body and soft anti-aliased corner pixels at full size.
+    #[test]
+    fn the_balloon_icon_is_drawn_at_full_size() {
+        let v = render(256, 0);
+        assert_eq!(v.len(), 256 * 256 * 4);
+        assert_eq!(px(&v, 256, 128, 40)[3], 255, "the tile body is opaque");
+        assert_eq!(
+            px(&v, 256, 0, 0)[3],
+            0,
+            "the corner outside the rounding is clear"
+        );
+        let soft = v.chunks(4).filter(|p| p[3] > 0 && p[3] < 255).count();
+        assert!(soft > 200, "edges are anti-aliased at this size: {soft}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_large_hicon_is_made_and_freed() {
+        let h = hicon_sized(256, 0);
+        assert_ne!(h, 0);
+        destroy(h);
+        let big = hicon_sized(1000, 0);
+        assert_ne!(big, 0, "the side is clamped, not refused");
+        destroy(big);
+    }
 
     fn px(v: &[u8], side: u32, x: u32, y: u32) -> [u8; 4] {
         let o = ((y * side + x) * 4) as usize;

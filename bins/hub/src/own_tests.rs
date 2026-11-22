@@ -17,9 +17,9 @@ use std::time::Duration;
 
 const MANIFEST_URL: &str = hub_core::selfupdate::MANIFEST_URL;
 
-/// A fake github.com folder path for a URL under `Kaan88/hub-rs`.
+/// A fake github.com folder path for a URL under `Kaan88/mdhub`.
 fn hub_path(fx: &Fx, tail: &str) -> PathBuf {
-    let mut p = fx.root.join("release").join("Kaan88").join("hub-rs");
+    let mut p = fx.root.join("release").join("Kaan88").join("mdhub");
     for part in tail.split('/') {
         p.push(part);
     }
@@ -33,7 +33,7 @@ fn publish_hub(fx: &Fx, version: &str, exe_bytes: &[u8]) {
     std::fs::write(dl.join("hub.exe"), exe_bytes).unwrap();
     let latest = hub_path(fx, "releases/latest/download");
     std::fs::create_dir_all(&latest).unwrap();
-    let url = format!("https://github.com/Kaan88/hub-rs/releases/download/v{version}/hub.exe");
+    let url = format!("https://github.com/Kaan88/mdhub/releases/download/v{version}/hub.exe");
     std::fs::write(
         latest.join("hub-update.txt"),
         format!(
@@ -74,7 +74,7 @@ fn hub_urls(fx: &Fx) -> Vec<String> {
         .lock()
         .unwrap()
         .iter()
-        .filter(|u| u.contains("/hub-rs/"))
+        .filter(|u| u.contains("/mdhub/"))
         .cloned()
         .collect()
 }

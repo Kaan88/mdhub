@@ -48,7 +48,7 @@ Nothing. No release, no tag, no pushed repository, no GitHub repository, `ci` ne
   stops, the window opens and closes 20 times by message here, and the card is checked by tests
   and shots only. Routing of mouse, keyboard and wheel into the card (`app.rs`) is compiled and
   read, not exercised.
-- Hub's installer and release workflow; a repository for Hub (`hub-rs` is a working name).
+- Hub's installer and release workflow; a repository for Hub (`mdhub` is a working name).
 - "Swap at next start" for a downloaded Hub: it is swapped at "Restart now" or at quit, else
   deleted by `clean_up` at the next start and fetched again.
 - Streaming downloads with resume, free-space check (D-005): downloads are whole bodies in memory.

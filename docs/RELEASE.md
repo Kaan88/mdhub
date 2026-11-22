@@ -1,15 +1,15 @@
 # Release
 
 **No release of Hub exists, and none is cut without the owner saying so.** The private repository
-`Kaan88/hub-rs` exists (a working name, plan question 1; make it public with
-`gh repo edit Kaan88/hub-rs --visibility public --accept-visibility-change-consequences` before Hub
+`Kaan88/mdhub` exists (a working name, plan question 1; make it public with
+`gh repo edit Kaan88/mdhub --visibility public --accept-visibility-change-consequences` before Hub
 updates itself from it). No tag exists.
 
 ## What Hub's own release carries (self-update is built, the release is not)
 
 - `hub-update.txt`: format 1 of the shared updater (`mdshared_app::updater`), one executable, no
   engine, no uninstall entry. Hub reads it from the single constant `selfupdate::MANIFEST_URL`,
-  `https://github.com/Kaan88/hub-rs/releases/latest/download/hub-update.txt`; `HUB_UPDATE_MANIFEST`
+  `https://github.com/Kaan88/mdhub/releases/latest/download/hub-update.txt`; `HUB_UPDATE_MANIFEST`
   names another to try a release before it is the latest. Downloads must lie under that
   repository's `releases/download/` path.
 - `hub.txt`: Hub's own entry in the family's format, written by `tools/write-hub-txt.ps1`.

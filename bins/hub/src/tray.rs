@@ -254,8 +254,9 @@ mod os {
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::Shell::{
-        NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_USER, NIM_ADD, NIM_DELETE,
-        NIM_MODIFY, NIM_SETVERSION, NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW,
+        NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_LARGE_ICON, NIIF_USER, NIM_ADD,
+        NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NOTIFYICON_VERSION_4, NOTIFYICONDATAW,
+        Shell_NotifyIconW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
@@ -305,12 +306,17 @@ mod os {
     }
 
     /// The tray thread's own state, reached from the window procedure.
+    /// Side of the icon the balloon shows: Windows scales it down, never up.
+    const BALLOON_ICON_SIDE: u32 = 256;
+
     struct Ctx {
         shared: Arc<Shared>,
         post: Arc<dyn Post>,
         hwnd: Cell<isize>,
         taskbar_created: u32,
         icon: Cell<isize>,
+        /// The big icon of the last balloon (256 px), kept until the next or the end.
+        balloon_icon: Cell<isize>,
         count: Cell<u32>,
         added: Cell<bool>,
         v4: Cell<bool>,
@@ -405,6 +411,7 @@ mod os {
             unsafe { Shell_NotifyIconW(NIM_DELETE, &d) };
         }
         icon::destroy(c.icon.replace(0));
+        icon::destroy(c.balloon_icon.replace(0));
     }
 
     fn deliver_balloon(c: &Ctx) {
@@ -418,9 +425,18 @@ mod os {
             let mut d = nid(c, NIF_INFO);
             copy_wide(&mut d.szInfoTitle, &fit16(&title, 63));
             copy_wide(&mut d.szInfo, &fit16(&text, 255));
-            d.dwInfoFlags = NIIF_USER;
+            // A large icon of its own: the toast shows hBalloonIcon at its own size, and the
+            // 16-pixel tray icon stretched to it is what looked blurry.
+            let big = icon::hicon_sized(BALLOON_ICON_SIDE, 0);
+            d.dwInfoFlags = if big != 0 {
+                NIIF_USER | NIIF_LARGE_ICON
+            } else {
+                NIIF_USER
+            };
+            d.hBalloonIcon = big as _;
             // SAFETY: as in `add_icon`.
             unsafe { Shell_NotifyIconW(NIM_MODIFY, &d) };
+            icon::destroy(c.balloon_icon.replace(big));
         }
     }
 
@@ -628,6 +644,7 @@ mod os {
             hwnd: Cell::new(hwnd as isize),
             taskbar_created,
             icon: Cell::new(0),
+            balloon_icon: Cell::new(0),
             count: Cell::new(u32::MAX),
             added: Cell::new(false),
             v4: Cell::new(false),
