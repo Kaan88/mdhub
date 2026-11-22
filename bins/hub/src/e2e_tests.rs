@@ -64,9 +64,13 @@ impl Transport for Counting {
 #[derive(Default)]
 pub(crate) struct FakeShell {
     pub running: AtomicBool,
+    /// With `running`, mdview is open as well.
+    pub view_too: AtomicBool,
     pub launched: Mutex<Vec<String>>,
     pub revealed: Mutex<Vec<PathBuf>>,
     pub urls: Mutex<Vec<String>>,
+    /// The threads `running` was asked on.
+    pub run_threads: Mutex<Vec<std::thread::ThreadId>>,
 }
 
 impl Shell for FakeShell {
@@ -83,10 +87,17 @@ impl Shell for FakeShell {
         true
     }
     fn running(&self, exe: &Path) -> bool {
+        self.run_threads
+            .lock()
+            .unwrap()
+            .push(std::thread::current().id());
+        let name = exe
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
         self.running.load(Ordering::SeqCst)
-            && exe
-                .file_name()
-                .is_some_and(|n| n.to_string_lossy().starts_with("mdedit"))
+            && (name.starts_with("mdedit")
+                || (self.view_too.load(Ordering::SeqCst) && name.starts_with("mdview")))
     }
 }
 

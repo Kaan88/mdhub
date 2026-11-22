@@ -395,7 +395,11 @@ fn enter_runs_the_main_button_of_the_selected_row() {
     let mut fx = Fx::new("enter");
     fx.publish_files("mdedit", "1.0.0", &[("mdedit.exe", body("a"))], None);
     fx.check();
-    // mdedit is selected and not installed: its main button is Install.
+    // A fresh window's first row is lit, but nothing was chosen: Enter does nothing yet.
+    fx.cmd(Cmd::Primary);
+    assert!(!fx.eng.busy(), "a stray Enter installs nothing");
+    // mdedit is chosen and not installed: its main button is Install.
+    fx.cmd(Cmd::Select(0));
     fx.cmd(Cmd::Primary);
     assert!(fx.eng.busy());
     fx.settle();
@@ -640,4 +644,131 @@ fn the_menu_items_of_an_unknown_app_are_just_the_page() {
     let fx = Fx::new("menu2");
     let v = fx.eng.menu_items("nonesuch");
     assert_eq!(v, vec![(MenuItem::GitHub, "GitHub", true)]);
+}
+
+#[test]
+fn a_held_key_repeats_only_what_is_harmless() {
+    use crate::glue::repeatable;
+    assert!(repeatable(&Cmd::SelectRel(1)));
+    assert!(repeatable(&Cmd::FilterChar('a')));
+    assert!(repeatable(&Cmd::FilterBack));
+    for c in [Cmd::Primary, Cmd::CheckNow, Cmd::FocusFilter, Cmd::Esc] {
+        assert!(!repeatable(&c), "{c:?}");
+    }
+}
+
+fn two_open_updates(name: &str) -> Fx {
+    let mut fx = Fx::with_delay(name, Duration::from_millis(40));
+    for (id, exe) in [("mdedit", "mdedit.exe"), ("mdview", "mdview.exe")] {
+        fx.publish_files(id, "1.0.0", &[(exe, body("a"))], None);
+    }
+    fx.check();
+    fx.cmd(Cmd::Install("mdedit"));
+    fx.cmd(Cmd::Install("mdview"));
+    fx.settle();
+    for (id, exe) in [("mdedit", "mdedit.exe"), ("mdview", "mdview.exe")] {
+        fx.publish_files(id, "2.0.0", &[(exe, body("b"))], None);
+    }
+    fx.check();
+    fx
+}
+
+#[test]
+fn update_asks_again_whether_the_app_is_open_now() {
+    let mut fx = two_open_updates("stale");
+    // The last look said it is not open; since then it was started.
+    fx.eng.refresh_running();
+    assert!(!fx.app("mdedit").running);
+    fx.shell.running.store(true, Ordering::SeqCst);
+    fx.cmd(Cmd::Update("mdedit"));
+    assert!(fx.vm().banner.is_some(), "asked, not closed");
+    assert!(!fx.eng.busy());
+    assert_eq!(fx.file("mdedit", "mdedit.exe"), Some(body("a")));
+}
+
+#[test]
+fn a_queued_update_of_an_app_opened_meanwhile_is_asked_about_when_its_turn_comes() {
+    let mut fx = two_open_updates("queued");
+    fx.eng.refresh_running();
+    fx.cmd(Cmd::Update("mdview"));
+    fx.cmd(Cmd::Update("mdedit"));
+    assert!(fx.eng.busy());
+    // mdedit is started while mdview downloads.
+    fx.shell.running.store(true, Ordering::SeqCst);
+    fx.settle();
+    assert_eq!(fx.file("mdview", "mdview.exe"), Some(body("b")));
+    assert_eq!(
+        fx.file("mdedit", "mdedit.exe"),
+        Some(body("a")),
+        "untouched"
+    );
+    assert_eq!(fx.row("mdedit"), Row::Update);
+    assert!(fx.vm().banner.is_some(), "it is asked about instead");
+    // Yes closes it; the install then runs without asking again.
+    fx.shell.running.store(false, Ordering::SeqCst);
+    fx.cmd(Cmd::BannerYes);
+    fx.settle();
+    assert_eq!(fx.file("mdedit", "mdedit.exe"), Some(body("b")));
+}
+
+#[test]
+fn esc_on_the_offer_bar_is_the_same_as_no() {
+    let mut fx = two_open_updates("esc");
+    fx.shell.running.store(true, Ordering::SeqCst);
+    fx.shell.view_too.store(true, Ordering::SeqCst);
+    fx.eng.refresh_running();
+    // Both are open: mdedit is asked about, mdview waits behind it.
+    fx.cmd(Cmd::UpdateAll);
+    assert!(fx.vm().banner.is_some());
+    fx.cmd(Cmd::Esc);
+    assert!(fx.vm().banner.is_none());
+    // Later work ending must not bring the other open app's offer back.
+    fx.shell.running.store(false, Ordering::SeqCst);
+    fx.cmd(Cmd::Update("mdedit"));
+    fx.settle();
+    assert!(fx.vm().banner.is_none(), "nothing is asked about later");
+}
+
+#[test]
+fn the_running_lookup_is_done_off_the_window_thread() {
+    let mut fx = two_open_updates("asyncrun");
+    fx.shell.run_threads.lock().unwrap().clear();
+    fx.shell.running.store(true, Ordering::SeqCst);
+    fx.eng.refresh_running_async();
+    let ev = loop {
+        let e = fx
+            .rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("an event");
+        if matches!(e, crate::glue::Event::Running(_)) {
+            break e;
+        }
+    };
+    assert!(fx.eng.handle(ev));
+    assert!(fx.app("mdedit").running);
+    let me = std::thread::current().id();
+    let threads = fx.shell.run_threads.lock().unwrap().clone();
+    assert!(!threads.is_empty());
+    assert!(threads.iter().all(|t| *t != me), "asked on the caller");
+}
+
+#[test]
+fn closing_stops_the_install_and_the_queue_and_waits_for_the_worker() {
+    let mut fx = Fx::with_delay("close", Duration::from_millis(150));
+    fx.publish_files("mdedit", "1.0.0", &[("mdedit.exe", body("a"))], None);
+    fx.publish_files("mdview", "1.0.0", &[("mdview.exe", body("m"))], None);
+    fx.check();
+    fx.cmd(Cmd::Install("mdedit"));
+    fx.cmd(Cmd::Install("mdview"));
+    assert!(fx.eng.installing());
+    assert!(fx.eng.begin_close(), "the worker is still ending");
+    assert!(fx.eng.installing(), "not safe to exit yet");
+    fx.settle();
+    assert!(!fx.eng.installing(), "now it is");
+    assert_eq!(fx.file("mdedit", "mdedit.exe"), None);
+    assert_eq!(
+        fx.file("mdview", "mdview.exe"),
+        None,
+        "the queue did not run"
+    );
 }

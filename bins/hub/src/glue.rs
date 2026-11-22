@@ -33,6 +33,8 @@ pub enum Event {
     },
     /// A check ended: what each app's release says now.
     Checked(Vec<(&'static str, Latest)>),
+    /// Which installed apps run, looked up on a worker (never on the window's thread).
+    Running(Vec<(&'static str, bool)>),
     /// A second launch asked for this window (the shell raises it).
     Raise,
 }
@@ -465,6 +467,15 @@ pub fn key_command(
     }
 }
 
+/// May a held key repeat this command? Moving the selection and editing the filter may; starting
+/// an install, launching an app or a check may not (holding Enter would install, then cancel).
+pub fn repeatable(cmd: &Cmd) -> bool {
+    matches!(
+        cmd,
+        Cmd::SelectRel(_) | Cmd::FilterChar(_) | Cmd::FilterBack
+    )
+}
+
 // ---- scheduling -----------------------------------------------------------------------------------
 
 /// How long until the next check should start: `Some(ZERO)` means now, `None` means never (the
@@ -521,7 +532,12 @@ pub struct Engine {
     filter: String,
     filter_focus: bool,
     sel: usize,
+    /// The selection was moved or clicked by the user: only then does Enter act on it.
+    sel_touched: bool,
     hover: Option<usize>,
+    running_busy: bool,
+    /// Apps the user said yes to closing (the offer bar), so the install may close them.
+    consented: Vec<&'static str>,
     banner: Option<&'static str>,
     pending_close: Vec<&'static str>,
     queue: VecDeque<(&'static str, JobKind)>,
@@ -582,6 +598,9 @@ impl Engine {
             filter: String::new(),
             filter_focus: false,
             sel: 0,
+            sel_touched: false,
+            running_busy: false,
+            consented: Vec::new(),
             hover: None,
             banner: None,
             pending_close: Vec::new(),
@@ -618,6 +637,9 @@ impl Engine {
             fixed: Some(vm),
             filter: String::new(),
             filter_focus: false,
+            sel_touched: false,
+            running_busy: false,
+            consented: Vec::new(),
             hover: None,
             banner: None,
             pending_close: Vec::new(),
@@ -640,6 +662,22 @@ impl Engine {
     /// Is any work in flight (a check, an install, a queued install)?
     pub fn busy(&self) -> bool {
         self.active.is_some() || self.checking || !self.queue.is_empty()
+    }
+
+    /// Is an install or a roll back running or waiting? (A check may be dropped at exit; this may
+    /// not be, without being told to stop first.)
+    pub fn installing(&self) -> bool {
+        self.active.is_some() || !self.queue.is_empty()
+    }
+
+    /// The window is closing: nothing more is started, the running job is asked to stop (it
+    /// stops before it places anything, or finishes what it is placing). True while it still runs.
+    pub fn begin_close(&mut self) -> bool {
+        if self.fixed.is_some() {
+            return false;
+        }
+        self.apply(Cmd::CancelAll);
+        self.active.is_some()
     }
 
     pub fn checking(&self) -> bool {
@@ -806,6 +844,7 @@ impl Engine {
             Cmd::Select(i) => {
                 let changed = self.sel != i;
                 self.sel = i;
+                self.sel_touched = true;
                 self.filter_focus = false;
                 changed
             }
@@ -818,6 +857,7 @@ impl Engine {
                 let next = (cur + d).clamp(0, n - 1) as usize;
                 let changed = next != self.sel;
                 self.sel = next;
+                self.sel_touched = true;
                 changed
             }
             Cmd::SetView(v) => {
@@ -837,12 +877,14 @@ impl Engine {
                 if self.filter.chars().count() < 40 {
                     self.filter.push(c);
                     self.sel = 0;
+                    self.sel_touched = false;
                 }
                 true
             }
             Cmd::FilterBack => {
                 let had = self.filter.pop().is_some();
                 self.sel = 0;
+                self.sel_touched = false;
                 had
             }
             Cmd::FilterBlur => {
@@ -852,11 +894,14 @@ impl Engine {
             }
             Cmd::Esc => {
                 if self.banner.is_some() {
+                    // The same as No: the open apps still waiting are not asked about later.
+                    self.pending_close.clear();
                     self.banner = None;
                     true
                 } else if !self.filter.is_empty() {
                     self.filter.clear();
                     self.sel = 0;
+                    self.sel_touched = false;
                     true
                 } else if self.filter_focus {
                     self.filter_focus = false;
@@ -866,6 +911,10 @@ impl Engine {
                 }
             }
             Cmd::Primary => {
+                // Enter acts on a row the user chose, not on the one a fresh window starts with.
+                if !self.sel_touched {
+                    return false;
+                }
                 let ids = self.visible_ids(now);
                 let Some(id) = ids.get(self.sel.min(ids.len().saturating_sub(1))).copied() else {
                     return false;
@@ -886,6 +935,8 @@ impl Engine {
             Cmd::Open(id) => self.open(id),
             Cmd::Install(id) | Cmd::TryAgain(id) => self.enqueue(id, JobKind::Install),
             Cmd::Update(id) => {
+                // Is it open now? Not what was cached a while ago.
+                self.refresh_one(id);
                 if self.slot(id).is_some_and(|s| s.running) {
                     self.banner = Some(id);
                     true
@@ -899,6 +950,7 @@ impl Engine {
                 let ids: Vec<&'static str> = self.queue.iter().map(|(i, _)| *i).collect();
                 self.queue.clear();
                 self.pending_close.clear();
+                self.consented.clear();
                 for id in ids {
                     self.set_phase(id, Phase::Idle);
                 }
@@ -912,6 +964,7 @@ impl Engine {
             Cmd::BannerYes => match self.banner.take() {
                 Some(id) => {
                     self.pending_close.retain(|p| *p != id);
+                    self.consented.push(id);
                     self.enqueue(id, JobKind::Install);
                     true
                 }
@@ -985,6 +1038,7 @@ impl Engine {
     fn update_all(&mut self, _now: u64) -> bool {
         // Every app with an update goes into the queue, in the window's order; one that is open
         // is asked about first (the offer bar), never closed without asking.
+        self.refresh_running();
         let mut running = Vec::new();
         let mut todo = Vec::new();
         for s in &self.slots {
@@ -1052,6 +1106,25 @@ impl Engine {
             return;
         }
         while let Some((id, kind)) = self.queue.pop_front() {
+            if self.slot(id).is_none() {
+                continue;
+            }
+            if kind == JobKind::Install {
+                // The app may have been opened since it was queued: ask before closing it.
+                let yes = self.consented.iter().position(|c| *c == id);
+                if let Some(i) = yes {
+                    self.consented.remove(i);
+                } else {
+                    self.refresh_one(id);
+                    if self.slot(id).is_some_and(|s| s.running) {
+                        self.set_phase(id, Phase::Idle);
+                        if !self.pending_close.contains(&id) {
+                            self.pending_close.push(id);
+                        }
+                        continue;
+                    }
+                }
+            }
             let cancel = Arc::new(AtomicBool::new(false));
             let opts = self.opts(cancel.clone());
             let Some(slot) = self.slot(id) else { continue };
@@ -1166,6 +1239,38 @@ impl Engine {
         }
     }
 
+    /// Looks at one app now: at a click, and before a queued job starts.
+    fn refresh_one(&mut self, id: &str) {
+        let shell = self.shell.clone();
+        if let Some(s) = self.slot_mut(id) {
+            s.running = s.installed.as_ref().is_some_and(|i| shell.running(&i.exe));
+        }
+    }
+
+    /// The same as `refresh_running`, on a worker: the answer comes back as `Event::Running`, so
+    /// the window's thread never waits for the process list.
+    pub fn refresh_running_async(&mut self) {
+        if self.running_busy || self.fixed.is_some() {
+            return;
+        }
+        let exes: Vec<(&'static str, std::path::PathBuf)> = self
+            .slots
+            .iter()
+            .filter_map(|s| s.installed.as_ref().map(|i| (s.app.id, i.exe.clone())))
+            .collect();
+        if exes.is_empty() {
+            return;
+        }
+        let (shell, post) = (self.shell.clone(), self.post.clone());
+        let spawned = std::thread::Builder::new()
+            .name("hub-running".into())
+            .spawn(move || {
+                let r = exes.iter().map(|(id, e)| (*id, shell.running(e))).collect();
+                post.post(Event::Running(r));
+            });
+        self.running_busy = spawned.is_ok();
+    }
+
     /// Looks at which installed apps run now (one pass over the process list; not at start).
     pub fn refresh_running(&mut self) -> bool {
         let shell = self.shell.clone();
@@ -1244,8 +1349,22 @@ impl Engine {
                 // tick look overdue.
                 self.last_check = Some(now);
                 self.failures = self.store.failures();
-                self.refresh_running();
+                self.refresh_running_async();
                 true
+            }
+            Event::Running(list) => {
+                self.running_busy = false;
+                let mut changed = false;
+                for (id, r) in list {
+                    if let Some(s) = self.slot_mut(id)
+                        && s.installed.is_some()
+                        && s.running != r
+                    {
+                        s.running = r;
+                        changed = true;
+                    }
+                }
+                changed
             }
         }
     }

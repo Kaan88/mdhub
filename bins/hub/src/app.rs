@@ -6,6 +6,7 @@ use crate::cli::{self, Args};
 use crate::demo;
 use crate::glue::{
     self, Cmd, Deps, Engine, Event, Key, MenuItem, Post, RealShell, Tmpl, command, key_command,
+    repeatable,
 };
 use crate::trace::Trace;
 use crate::view::{self, HEAD_H, ROW_H};
@@ -34,6 +35,8 @@ const MIN_SIZE: (u32, u32) = (520, 360);
 const MAX_SLEEP: Duration = Duration::from_secs(30 * 60);
 /// At most this often are the running apps looked up again on a focus change.
 const RUNNING_EVERY: Duration = Duration::from_secs(2);
+/// How long a closing window waits for the install it asked to stop.
+const CLOSE_WAIT: Duration = Duration::from_secs(8);
 const POPUP_W: f32 = 184.0;
 const POPUP_ROW: f32 = 30.0;
 
@@ -93,6 +96,9 @@ struct App {
     cursor: CursorIcon,
     dirty: bool,
     exit_now: bool,
+    /// The window was asked to close while an install ran: the install is told to stop and the
+    /// window waits for it, up to this time.
+    closing: Option<Instant>,
     finished: bool,
     first: bool,
     shown: bool,
@@ -230,6 +236,11 @@ impl App {
         self.layout = layout;
         self.vm = vm;
         self.dirty = false;
+        // The rows moved under a still pointer (a scroll, a new filter, a result): the highlight
+        // follows the pointer, so a click lands on the row that is lit.
+        if self.popup.is_none() && self.engine.set_hover(hover_row(&self.layout, self.mouse)) {
+            self.dirty = true;
+        }
         self.present();
     }
 
@@ -279,11 +290,7 @@ impl App {
                 w.set_cursor(icon);
             }
         }
-        let hover = match self.layout.at(x, y) {
-            Hit::Row(i) | Hit::Action(i, _) | Hit::Menu(i) => Some(i),
-            _ => None,
-        };
-        if self.engine.set_hover(hover) {
+        if self.engine.set_hover(hover_row(&self.layout, (x, y))) {
             self.dirty = true;
         }
     }
@@ -325,7 +332,7 @@ impl App {
             }
             Hit::Min => window.set_minimized(true),
             Hit::Max => window.set_maximized(!window.is_maximized()),
-            Hit::Close => self.exit_now = true,
+            Hit::Close => self.request_exit(),
             Hit::None => {
                 // A click on nothing leaves the filter box.
                 self.apply(Cmd::FilterBlur);
@@ -401,9 +408,28 @@ impl App {
         };
         if let Some(k) = map_key(&ev)
             && let Some(cmd) = key_command(focus, k, ctrl, shift, cols)
+            && (!ev.repeat || repeatable(&cmd))
         {
             self.apply(cmd);
         }
+    }
+}
+
+/// The row menu is drawn at a fixed place: what moves the rows or the window closes it.
+fn closes_popup(ev: &WindowEvent) -> bool {
+    matches!(
+        ev,
+        WindowEvent::Resized(_)
+            | WindowEvent::ScaleFactorChanged { .. }
+            | WindowEvent::MouseWheel { .. }
+    )
+}
+
+/// The row (or its button) under the pointer.
+fn hover_row(layout: &Layout, (x, y): (f32, f32)) -> Option<usize> {
+    match layout.at(x, y) {
+        Hit::Row(i) | Hit::Action(i, _) | Hit::Menu(i) => Some(i),
+        _ => None,
     }
 }
 
@@ -505,8 +531,12 @@ impl ApplicationHandler<Event> for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        if self.popup.is_some() && closes_popup(&event) {
+            self.popup = None;
+            self.dirty = true;
+        }
         match event {
-            WindowEvent::CloseRequested => self.exit_now = true,
+            WindowEvent::CloseRequested => self.request_exit(),
             WindowEvent::RedrawRequested => self.draw(),
             WindowEvent::Resized(_) => {
                 self.dirty = true;
@@ -526,9 +556,7 @@ impl ApplicationHandler<Event> for App {
                 // An app may have been started or closed meanwhile.
                 if self.last_running.elapsed() >= RUNNING_EVERY {
                     self.last_running = Instant::now();
-                    if self.engine.refresh_running() {
-                        self.dirty = true;
-                    }
+                    self.engine.refresh_running_async();
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -568,6 +596,11 @@ impl ApplicationHandler<Event> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(t) = self.closing
+            && (!self.engine.installing() || Instant::now() >= t)
+        {
+            self.exit_now = true;
+        }
         if self.exit_now || self.exit_at.is_some_and(|t| Instant::now() >= t) {
             self.finish(event_loop);
             return;
@@ -577,9 +610,7 @@ impl ApplicationHandler<Event> for App {
             if std::mem::take(&mut self.first) {
                 // After the first frame: which apps run (one pass over the process list).
                 self.last_running = Instant::now();
-                if self.engine.refresh_running() {
-                    self.dirty = true;
-                }
+                self.engine.refresh_running_async();
                 self.trace.stage("running apps looked up");
             }
             if self.engine.tick(now) {
@@ -592,6 +623,9 @@ impl ApplicationHandler<Event> for App {
             w.request_redraw();
         }
         let mut until = self.exit_at;
+        if let Some(t) = self.closing {
+            until = Some(until.map_or(t, |u| u.min(t)));
+        }
         if let Some(d) = self.engine.wait(now).filter(|_| self.shown) {
             let t = Instant::now() + d.min(MAX_SLEEP);
             until = Some(until.map_or(t, |u| u.min(t)));
@@ -604,6 +638,22 @@ impl ApplicationHandler<Event> for App {
 }
 
 impl App {
+    /// The close button, Alt+F4: leaves at once unless an install or a roll back is running. That
+    /// one is told to stop (it places nothing more, or ends what it is placing) and is waited
+    /// for, a few seconds at most; a second close does not wait.
+    fn request_exit(&mut self) {
+        if self.closing.is_some() || !self.engine.installing() {
+            self.exit_now = true;
+            return;
+        }
+        self.engine.begin_close();
+        self.closing = Some(Instant::now() + CLOSE_WAIT);
+        self.dirty = true;
+        if !self.engine.installing() {
+            self.exit_now = true;
+        }
+    }
+
     fn finish(&mut self, event_loop: &ActiveEventLoop) {
         if std::mem::replace(&mut self.finished, true) {
             return;
@@ -690,6 +740,7 @@ pub fn run(args: Args, started: Instant) -> i32 {
         shown: false,
         last_running: Instant::now(),
         exit_now: false,
+        closing: None,
         finished: false,
         _single: single,
     };
@@ -699,5 +750,21 @@ pub fn run(args: Args, started: Instant) -> i32 {
             eprintln!("hub: {e}");
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use winit::dpi::PhysicalSize;
+    use winit::window::Theme;
+
+    #[test]
+    fn what_moves_the_rows_or_the_window_closes_the_row_menu() {
+        assert!(closes_popup(&WindowEvent::Resized(PhysicalSize::new(
+            800, 600
+        ))));
+        assert!(!closes_popup(&WindowEvent::ThemeChanged(Theme::Dark)));
+        assert!(!closes_popup(&WindowEvent::Focused(true)));
     }
 }
