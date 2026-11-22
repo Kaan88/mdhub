@@ -812,3 +812,25 @@ fn the_offer_bar_goes_when_its_app_is_updated_another_way() {
     fx.settle();
     assert_eq!(fx.file("mdedit", "mdedit.exe"), Some(body("b")));
 }
+
+/// A progress report that arrives after its job was cancelled and reported (the worker's last
+/// words, still in the queue) must not put the row back into "downloading".
+#[test]
+fn a_late_progress_report_of_a_job_that_is_over_does_not_bring_its_row_back() {
+    let mut fx = two_with_updates("late-progress");
+    fx.shell.running.store(false, Ordering::SeqCst);
+    fx.cmd(Cmd::Update("mdedit"));
+    fx.cmd(Cmd::Cancel("mdedit"));
+    fx.settle();
+    assert_eq!(fx.row("mdedit"), Row::Update, "cancelled: as it was");
+    let late = Event::Progress {
+        id: "mdedit",
+        p: hub_core::install::Progress::Downloading {
+            file: "mdedit.exe".into(),
+            done: 1,
+            total: 2,
+        },
+    };
+    assert!(!fx.eng.handle(late), "nothing changed");
+    assert_eq!(fx.row("mdedit"), Row::Update);
+}

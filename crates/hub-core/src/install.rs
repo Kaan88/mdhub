@@ -2499,6 +2499,29 @@ mod tests {
         assert_eq!(seen.last(), Some(&Progress::Finished));
     }
 
+    /// The transport is asked for the announced size and one byte, never more: a server that
+    /// sends more than the release says is cut off there, not read into memory to be refused
+    /// afterwards. A file of unknown size (a legacy manifest) gets the fixed cap.
+    #[test]
+    fn a_download_is_capped_at_its_announced_size_plus_one_byte() {
+        struct Caps(Mutex<Vec<usize>>);
+        impl Transport for Caps {
+            fn get(&self, _: &str, max: usize, _: Duration) -> Result<Vec<u8>, String> {
+                self.0.lock().unwrap().push(max);
+                Err("TooLarge".into())
+            }
+        }
+        let rig = Rig::new("cap");
+        let t = Caps(Mutex::new(Vec::new()));
+        let mut known = spec("fake.exe", b"twelve bytes");
+        let dir = rig.cache("1.0.0");
+        let r = fetch_verified(&t, &known, &dir, &rig.opts(), &mut |_| {});
+        assert!(matches!(r, Err(InstallError::Download { .. })), "{r:?}");
+        known.size = 0;
+        let _ = fetch_verified(&t, &known, &dir, &rig.opts(), &mut |_| {});
+        assert_eq!(*t.0.lock().unwrap(), [13, UNSIZED_CAP]);
+    }
+
     #[test]
     fn closing_windows_of_a_program_that_is_not_running_is_harmless() {
         RealCloser.ask_close(&[PathBuf::from("C:\\definitely\\not\\here\\nothing.exe")]);
