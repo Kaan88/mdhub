@@ -750,3 +750,65 @@ fn the_menu_opens_folders_and_pages_and_the_launch_goes_to_the_shell() {
     assert!(items.iter().any(|i| i.0 == MenuItem::Open && !i.2));
     assert!(items.iter().any(|i| i.0 == MenuItem::GitHub && i.2));
 }
+
+/// mdedit and mdview installed at 1.0.0 with 1.1.0 out, files served slowly, mdedit open.
+fn two_with_updates(name: &str) -> Fx {
+    let mut fx = Fx::with_delay(name, Duration::from_millis(300));
+    fx.publish_files("mdedit", "1.0.0", &[("mdedit.exe", body("a"))], None);
+    fx.publish_files("mdview", "1.0.0", &[("mdview.exe", body("m"))], None);
+    fx.check();
+    fx.cmd(Cmd::Install("mdedit"));
+    fx.cmd(Cmd::Install("mdview"));
+    fx.settle();
+    fx.publish_files("mdedit", "1.1.0", &[("mdedit.exe", body("b"))], None);
+    fx.publish_files("mdview", "1.1.0", &[("mdview.exe", body("n"))], None);
+    fx.check();
+    fx.shell.running.store(true, Ordering::SeqCst);
+    fx
+}
+
+/// "Close and update" is a yes to the install it starts, not a standing permission: when that
+/// install is cancelled before it began, a later one asks again before it closes the app.
+#[test]
+fn a_yes_to_closing_an_app_does_not_outlive_the_install_it_was_given_for() {
+    let mut fx = two_with_updates("consent-cancel");
+    // mdview (not open) is updating; mdedit (open) is asked about, answered yes, and waits.
+    fx.cmd(Cmd::Update("mdview"));
+    assert!(fx.eng.installing());
+    fx.cmd(Cmd::Update("mdedit"));
+    assert!(fx.vm().banner.is_some());
+    fx.cmd(Cmd::BannerYes);
+    assert!(matches!(fx.row("mdedit"), Row::Waiting(_)), "queued");
+    // The user thinks better of it.
+    fx.cmd(Cmd::Cancel("mdedit"));
+    // Later, with mdedit closed, Update all queues it again behind mdview ...
+    fx.shell.running.store(false, Ordering::SeqCst);
+    fx.cmd(Cmd::UpdateAll);
+    assert!(matches!(fx.row("mdedit"), Row::Waiting(_)), "queued again");
+    // ... and mdedit is opened before its turn comes.
+    fx.shell.running.store(true, Ordering::SeqCst);
+    fx.settle();
+    assert_eq!(fx.file("mdview", "mdview.exe"), Some(body("n")));
+    assert!(
+        fx.file("mdedit", "mdedit.exe") == Some(body("a")),
+        "open and not asked about this time: left alone"
+    );
+    assert!(fx.vm().banner.is_some(), "asked again");
+}
+
+/// The bar asks about an app; the user closes the app and presses its Update button instead.
+/// The question is answered by that: the bar goes, and no yes is left behind for later.
+#[test]
+fn the_offer_bar_goes_when_its_app_is_updated_another_way() {
+    let mut fx = two_with_updates("consent-stale-bar");
+    fx.cmd(Cmd::Update("mdedit"));
+    assert!(fx.vm().banner.is_some());
+    fx.shell.running.store(false, Ordering::SeqCst);
+    fx.cmd(Cmd::Update("mdedit"));
+    assert!(fx.eng.installing(), "closed by hand: it installs");
+    assert!(fx.vm().banner.is_none(), "nothing left to ask");
+    // A click that still lands where the bar was answers nothing.
+    assert!(!fx.eng.apply(Cmd::BannerYes));
+    fx.settle();
+    assert_eq!(fx.file("mdedit", "mdedit.exe"), Some(body("b")));
+}

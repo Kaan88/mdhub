@@ -1213,8 +1213,13 @@ impl Engine {
             Cmd::BannerYes => match self.banner.take() {
                 Some(id) => {
                     self.pending_close.retain(|p| *p != id);
+                    // The yes is for the install it starts, and for no other: one that does not
+                    // get queued leaves no permission behind.
                     self.consented.push(id);
                     self.enqueue(id, JobKind::Install);
+                    if !self.in_flight(id) {
+                        self.consented.retain(|c| *c != id);
+                    }
                     true
                 }
                 // No app is asking (a second click of a double-click): nothing to answer. Hub's
@@ -1289,10 +1294,17 @@ impl Engine {
         let before = self.queue.len();
         self.queue.retain(|(q, _)| *q != id);
         if self.queue.len() != before {
+            // A yes to closing the app was for this install: it goes with it.
+            self.consented.retain(|c| *c != id);
             self.set_phase(id, Phase::Idle);
             return true;
         }
         false
+    }
+
+    /// Is a job of this app running or waiting its turn?
+    fn in_flight(&self, id: &str) -> bool {
+        self.active.as_ref().is_some_and(|a| a.id == id) || self.queue.iter().any(|(q, _)| *q == id)
     }
 
     fn update_all(&mut self, _now: u64) -> bool {
@@ -1354,6 +1366,10 @@ impl Engine {
             }
         }
         self.notice = None;
+        // The bar's question about this app is answered by whatever queued it.
+        if self.banner == Some(id) {
+            self.banner = None;
+        }
         self.set_phase(id, Phase::Queued);
         self.queue.push_back((id, kind));
         self.pump();
