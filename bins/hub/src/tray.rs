@@ -6,8 +6,10 @@
 //! ([`classify`]), the tooltip, and the window's life as a state machine ([`step`]). The second
 //! (`os`, Windows only) is the icon itself on a thread of its own.
 //!
-//! **The tray thread** owns one message-only window (`HWND_MESSAGE`, no UI) and a `GetMessageW`
-//! loop, so it sleeps in the kernel until something happens: no timer, no polling. It owns no
+//! **The tray thread** owns one hidden top-level window (never shown, no UI; not a message-only
+//! window, which is not sent the broadcast `TaskbarCreated` that tells the icon to come back after
+//! Explorer restarts) and a `GetMessageW` loop, so it sleeps in the kernel until something
+//! happens: no timer, no polling. It owns no
 //! state of Hub's besides a [`Snapshot`] the engine hands it (`Tray::update`); a click is turned
 //! into a [`TrayCmd`] and posted to the winit loop as `Event::Tray`, which acts on it. The menu
 //! and the balloon are the system's (`TrackPopupMenu`, `NIF_INFO`).
@@ -248,7 +250,7 @@ mod os {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicIsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicUsize, Ordering};
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::Shell::{
@@ -257,11 +259,11 @@ mod os {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-        DispatchMessageW, GetCursorPos, GetMessageW, HWND_MESSAGE, KillTimer, MF_CHECKED,
-        MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassExW,
+        DispatchMessageW, GetCursorPos, GetMessageW, KillTimer, MF_CHECKED, MF_GRAYED,
+        MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassExW,
         RegisterWindowMessageW, SetForegroundWindow, SetMenuDefaultItem, SetTimer, TPM_BOTTOMALIGN,
         TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP,
-        WM_DESTROY, WM_NULL, WM_TIMER, WNDCLASSEXW,
+        WM_DESTROY, WM_NULL, WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
     };
 
     /// The icon's callback message, the "something changed, look at the shared state" wake-up, and
@@ -286,6 +288,20 @@ mod os {
         hwnd: AtomicIsize,
         inner: Mutex<Inner>,
         tip_suffix: String,
+        /// `Tray::start` gave up waiting: the thread ends itself instead of running on unseen.
+        cancelled: AtomicBool,
+        /// How many times `TaskbarCreated` made the icon come back.
+        readds: AtomicU32,
+    }
+
+    /// Tray threads running now (a test asks that none is left behind).
+    static LIVE: AtomicUsize = AtomicUsize::new(0);
+
+    /// The balloon to show now, if there is an icon to show it from. Without one (the shell has no
+    /// taskbar yet, an add is being retried) it stays where it is, to be shown when the icon is
+    /// added: the engine already counts it as told.
+    fn take_balloon(inner: &mut Inner, added: bool) -> Option<(String, String)> {
+        if added { inner.balloon.take() } else { None }
     }
 
     /// The tray thread's own state, reached from the window procedure.
@@ -374,6 +390,8 @@ mod os {
             c.v4.set(v4);
             // SAFETY: the timer belongs to our own window.
             unsafe { KillTimer(c.hwnd.get() as HWND, RETRY_TIMER) };
+            // A balloon that came while there was no icon.
+            deliver_balloon(c);
         } else if c.tries.get() < RETRIES {
             // SAFETY: as above.
             unsafe { SetTimer(c.hwnd.get() as HWND, RETRY_TIMER, RETRY_MS, None) };
@@ -389,16 +407,27 @@ mod os {
         icon::destroy(c.icon.replace(0));
     }
 
-    /// The engine changed the snapshot or asked for a balloon: bring the icon in line.
-    fn sync(c: &Ctx) {
+    fn deliver_balloon(c: &Ctx) {
         let balloon = c
             .shared
             .inner
             .lock()
             .ok()
-            .and_then(|mut g| g.balloon.take());
+            .and_then(|mut g| take_balloon(&mut g, c.added.get()));
+        if let Some((title, text)) = balloon {
+            let mut d = nid(c, NIF_INFO);
+            copy_wide(&mut d.szInfoTitle, &fit16(&title, 63));
+            copy_wide(&mut d.szInfo, &fit16(&text, 255));
+            d.dwInfoFlags = NIIF_USER;
+            // SAFETY: as in `add_icon`.
+            unsafe { Shell_NotifyIconW(NIM_MODIFY, &d) };
+        }
+    }
+
+    /// The engine changed the snapshot or asked for a balloon: bring the icon in line.
+    fn sync(c: &Ctx) {
         if !c.added.get() {
-            return; // `add_icon` reads the shared state when it succeeds
+            return; // `add_icon` reads the shared state (and the balloon) when it succeeds
         }
         let (n, tip) = current(c);
         if n != c.count.get() || *c.tip.borrow() != tip {
@@ -410,14 +439,7 @@ mod os {
             // SAFETY: as in `add_icon`.
             unsafe { Shell_NotifyIconW(NIM_MODIFY, &d) };
         }
-        if let Some((title, text)) = balloon {
-            let mut d = nid(c, NIF_INFO);
-            copy_wide(&mut d.szInfoTitle, &fit16(&title, 63));
-            copy_wide(&mut d.szInfo, &fit16(&text, 255));
-            d.dwInfoFlags = NIIF_USER;
-            // SAFETY: as in `add_icon`.
-            unsafe { Shell_NotifyIconW(NIM_MODIFY, &d) };
-        }
+        deliver_balloon(c);
     }
 
     fn popup(c: &Ctx) {
@@ -499,6 +521,7 @@ mod os {
                     unsafe { Shell_NotifyIconW(NIM_DELETE, &d) };
                 }
                 c.tries.set(0);
+                c.shared.readds.fetch_add(1, Ordering::SeqCst);
                 add_icon(&c);
                 return 0;
             }
@@ -545,10 +568,31 @@ mod os {
         unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
     }
 
-    fn run(shared: Arc<Shared>, post: Arc<dyn Post>, ready: std::sync::mpsc::Sender<bool>) {
+    /// Counts a running tray thread for as long as it lives.
+    struct Live;
+    impl Live {
+        fn new() -> Live {
+            LIVE.fetch_add(1, Ordering::SeqCst);
+            Live
+        }
+    }
+    impl Drop for Live {
+        fn drop(&mut self) {
+            LIVE.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    fn run(
+        shared: Arc<Shared>,
+        post: Arc<dyn Post>,
+        ready: std::sync::mpsc::Sender<bool>,
+        _live: Live,
+    ) {
         let class = wide("HubTrayWindow");
-        // SAFETY: standard class registration and window creation with valid, NUL-ended names;
-        // a message-only window has no parent but HWND_MESSAGE and shows nothing.
+        // SAFETY: standard class registration and window creation with valid, NUL-ended names.
+        // The window is a top-level popup that is never shown (a tool window, never activated, so
+        // no taskbar button): a message-only window would not be sent `TaskbarCreated`, which is
+        // a broadcast.
         let hwnd = unsafe {
             let hinst = GetModuleHandleW(std::ptr::null());
             let mut wc: WNDCLASSEXW = std::mem::zeroed();
@@ -558,15 +602,15 @@ mod os {
             wc.lpszClassName = class.as_ptr();
             RegisterClassExW(&wc);
             CreateWindowExW(
-                0,
+                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
                 class.as_ptr(),
                 class.as_ptr(),
+                WS_POPUP,
                 0,
                 0,
                 0,
                 0,
-                0,
-                HWND_MESSAGE,
+                std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 hinst,
                 std::ptr::null(),
@@ -592,15 +636,24 @@ mod os {
         });
         let _ = CTX.try_with(|slot| *slot.borrow_mut() = Some(c.clone()));
         shared.hwnd.store(hwnd as isize, Ordering::SeqCst);
-        add_icon(&c);
+        // `Tray::start` may have given up already (and found no window to stop): end here, before
+        // an icon nobody owns is added.
+        if !shared.cancelled.load(Ordering::SeqCst) {
+            add_icon(&c);
+        }
         let _ = ready.send(true);
         // SAFETY: the usual loop; `msg` is written by GetMessageW. A return of 0 is WM_QUIT and -1
-        // an error: both end the loop.
+        // an error: both end the loop. A start that gave up while the add blocked has posted
+        // `WM_STOP` (or set `cancelled` before the window existed): the loop is not entered then.
         unsafe {
-            let mut msg: MSG = std::mem::zeroed();
-            while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
+            if shared.cancelled.load(Ordering::SeqCst) {
+                DestroyWindow(hwnd);
+            } else {
+                let mut msg: MSG = std::mem::zeroed();
+                while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
             }
         }
         shared.hwnd.store(0, Ordering::SeqCst);
@@ -619,27 +672,53 @@ mod os {
         /// when it could not be made; the caller then has no tray and must not rely on one. A
         /// shell with no taskbar yet is not a failure: the icon is added when it appears.
         pub fn start(post: Arc<dyn Post>, snap: Snapshot) -> Option<Tray> {
+            Tray::start_with(post, snap, tip_suffix(), std::time::Duration::from_secs(5))
+        }
+
+        /// [`start`](Self::start) with the wait and the tooltip tag given. When the wait runs out
+        /// the thread is told to end (it removes whatever it added), so a `None` never leaves an
+        /// icon and a message loop behind that nobody can stop.
+        fn start_with(
+            post: Arc<dyn Post>,
+            snap: Snapshot,
+            tip_suffix: String,
+            wait: std::time::Duration,
+        ) -> Option<Tray> {
             let shared = Arc::new(Shared {
                 hwnd: AtomicIsize::new(0),
                 inner: Mutex::new(Inner {
                     snap,
                     balloon: None,
                 }),
-                tip_suffix: tip_suffix(),
+                tip_suffix,
+                cancelled: AtomicBool::new(false),
+                readds: AtomicU32::new(0),
             });
             let (tx, rx) = std::sync::mpsc::channel();
             let s = shared.clone();
+            // Counted from here, not from when the thread gets going.
+            let live = Live::new();
             let thread = std::thread::Builder::new()
                 .name("hub-tray".into())
                 .stack_size(512 * 1024)
-                .spawn(move || run(s, post, tx))
+                .spawn(move || run(s, post, tx, live))
                 .ok()?;
-            match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            match rx.recv_timeout(wait) {
                 Ok(true) => Some(Tray {
                     shared,
                     thread: Some(thread),
                 }),
-                _ => None,
+                _ => {
+                    // Too late, or no window: the thread ends itself. Not joined (it may be stuck in
+                    // the shell, which is why we gave up on it).
+                    shared.cancelled.store(true, Ordering::SeqCst);
+                    let h = shared.hwnd.load(Ordering::SeqCst);
+                    if h != 0 {
+                        // SAFETY: posting to a window of the tray thread; a stale handle only fails.
+                        unsafe { PostMessageW(h as HWND, WM_STOP, 0, 0) };
+                    }
+                    None
+                }
             }
         }
 
@@ -686,6 +765,131 @@ mod os {
     impl Drop for Tray {
         fn drop(&mut self) {
             self.stop();
+        }
+    }
+
+    /// These start a real icon (a moment, with a tooltip tagged `(hub test)`): few, and one at a
+    /// time.
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::time::{Duration, Instant};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            EnumWindows, GetClassNameW, GetWindowThreadProcessId,
+        };
+
+        static SERIAL: Mutex<()> = Mutex::new(());
+
+        struct Nop;
+        impl Post for Nop {
+            fn post(&self, _: Event) {}
+        }
+
+        /// Our own top-level windows of the tray's class. `EnumWindows` lists top-level windows
+        /// only, which is also who a broadcast reaches: a message-only window is in neither.
+        fn tray_windows() -> Vec<isize> {
+            unsafe extern "system" fn each(h: HWND, l: LPARAM) -> i32 {
+                // SAFETY: `l` is the `Vec` passed below, alive for the whole enumeration.
+                let found = unsafe { &mut *(l as *mut Vec<isize>) };
+                let mut name = [0u16; 64];
+                // SAFETY: the buffer holds 64 units.
+                let n = unsafe { GetClassNameW(h, name.as_mut_ptr(), 64) };
+                let mut pid = 0u32;
+                // SAFETY: `pid` outlives the call.
+                unsafe { GetWindowThreadProcessId(h, &mut pid) };
+                if pid == std::process::id()
+                    && n > 0
+                    && String::from_utf16_lossy(&name[..n as usize]) == "HubTrayWindow"
+                {
+                    found.push(h as isize);
+                }
+                1
+            }
+            let mut found: Vec<isize> = Vec::new();
+            // SAFETY: the callback only reads its arguments and fills `found`.
+            unsafe { EnumWindows(Some(each), &mut found as *mut Vec<isize> as LPARAM) };
+            found
+        }
+
+        fn until(what: &str, mut f: impl FnMut() -> bool) {
+            let end = Instant::now() + Duration::from_secs(10);
+            while !f() {
+                assert!(Instant::now() < end, "{what}");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        fn snap() -> Snapshot {
+            Snapshot::default()
+        }
+
+        #[test]
+        fn a_balloon_waits_for_an_icon_instead_of_being_dropped() {
+            let mut i = Inner {
+                snap: snap(),
+                balloon: Some(("Hub".into(), "1 update: mdedit".into())),
+            };
+            // No icon in the notification area (no taskbar yet, an add being retried): kept.
+            assert_eq!(take_balloon(&mut i, false), None);
+            assert!(
+                i.balloon.is_some(),
+                "still there for when the icon is added"
+            );
+            // With one: shown once.
+            assert_eq!(
+                take_balloon(&mut i, true),
+                Some(("Hub".to_string(), "1 update: mdedit".to_string()))
+            );
+            assert_eq!(take_balloon(&mut i, true), None);
+        }
+
+        #[test]
+        fn the_tray_window_is_one_a_broadcast_reaches_and_taskbar_created_adds_the_icon_again() {
+            let _one = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+            let t = Tray::start_with(
+                Arc::new(Nop),
+                snap(),
+                "(hub test)".into(),
+                Duration::from_secs(10),
+            )
+            .expect("a tray");
+            let h = t.shared.hwnd.load(Ordering::SeqCst);
+            assert!(
+                tray_windows().contains(&h),
+                "a message-only window would not get the TaskbarCreated broadcast"
+            );
+            // What Explorer's broadcast is to the window (sent to it alone: a real broadcast
+            // would make every other program's icon come back too).
+            // SAFETY: a NUL-ended name; posting to our own window.
+            unsafe {
+                let msg = RegisterWindowMessageW(wide("TaskbarCreated").as_ptr());
+                PostMessageW(h as HWND, msg, 0, 0);
+            }
+            until("the icon was not added again", || {
+                t.shared.readds.load(Ordering::SeqCst) == 1
+            });
+            drop(t);
+            until("the window outlived the tray", || tray_windows().is_empty());
+        }
+
+        #[test]
+        fn a_start_that_gave_up_leaves_no_thread_behind() {
+            let _one = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+            // A wait of nothing: the window is not up when it runs out, as with a shell that is
+            // not answering.
+            let mut gave_up = false;
+            for _ in 0..50 {
+                let t =
+                    Tray::start_with(Arc::new(Nop), snap(), "(hub test)".into(), Duration::ZERO);
+                if t.is_none() {
+                    gave_up = true;
+                    break;
+                }
+            }
+            assert!(gave_up, "a start with no time to wait never gave up");
+            until("a tray thread runs on after its start gave up", || {
+                LIVE.load(Ordering::SeqCst) == 0 && tray_windows().is_empty()
+            });
         }
     }
 }

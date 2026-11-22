@@ -116,6 +116,23 @@ pub fn check(app: &App, t: &dyn Transport) -> Result<Option<Offer>, String> {
     check_pinned(app, t, pin)
 }
 
+/// Is `url` really under `prefix`? A plain `starts_with` is not enough: GitHub resolves dot
+/// segments (`.../releases/../../Other/repo/...`), so a URL that begins with the prefix could name
+/// another repository. Anything that could climb out, or hide that it does (a `.` or `..` segment,
+/// an encoded dot or slash, a backslash), is refused.
+pub fn under(url: &str, prefix: &str) -> bool {
+    let Some(tail) = url.strip_prefix(prefix) else {
+        return false;
+    };
+    let path = tail.split(['?', '#']).next().unwrap_or("");
+    let lower = tail.to_ascii_lowercase();
+    !tail.contains('\\')
+        && !lower.contains("%2e")
+        && !lower.contains("%2f")
+        && !lower.contains("%5c")
+        && !path.split('/').any(|seg| seg == "." || seg == "..")
+}
+
 /// [`check`] with the prefix given (`None` = no pin).
 pub fn check_pinned(
     app: &App,
@@ -127,7 +144,7 @@ pub fn check_pinned(
         return Ok(None);
     };
     if let Some(prefix) = prefix
-        && !o.app.url.starts_with(prefix)
+        && !under(&o.app.url, prefix)
     {
         return Err("the update is not from Hub's own releases".to_string());
     }
@@ -349,6 +366,32 @@ mod tests {
         assert_eq!(offer.size, None);
         assert_eq!(fake.asked(), vec![MURL.to_string()]);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_download_that_climbs_out_of_hubs_releases_is_refused() {
+        let sha = "a".repeat(64);
+        for bad in [
+            "download/../../Other/repo/releases/download/v9/hub.exe",
+            "download/./v9/hub.exe",
+            "download/%2e%2e/%2E%2e/Other/hub.exe",
+            "download/v9%2fhub.exe",
+            "download\\..\\hub.exe",
+            "../../Other/repo/releases/download/v9/hub.exe?x=1",
+        ] {
+            let fake = Fake::new();
+            let url = format!("{BASE}{bad}");
+            fake.put(MURL, manifest("9.0.0", &url, &sha).as_bytes());
+            assert_eq!(
+                check_pinned(&test_app("0.1.0"), &fake, Some(BASE)),
+                Err("the update is not from Hub's own releases".to_string()),
+                "{bad}"
+            );
+        }
+        // The ordinary URL, and one with a query, still pass.
+        assert!(under(&format!("{BASE}download/v0.2.0/hub.exe"), BASE));
+        assert!(under(&format!("{BASE}download/v0.2.0/hub.exe?a=b"), BASE));
+        assert!(!under("https://github.com/Kaan88/other/releases/x", BASE));
     }
 
     #[test]

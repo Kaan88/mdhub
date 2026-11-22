@@ -72,6 +72,25 @@ pub fn is_enabled_at(key: &str, value: &str) -> bool {
     command_at(key, value).is_some_and(|c| !c.trim().is_empty())
 }
 
+/// The parent every test's key lives under. Never the Run key.
+pub const TEST_ROOT: &str = r"Software\HubTest";
+
+/// For tests: deletes a test's own key (`HKCU\Software\HubTest\<name>`, with what is under it) and
+/// then `HKCU\Software\HubTest` itself if that is now empty, so a test run leaves nothing in the
+/// registry. A key outside `HubTest` is refused (nothing is deleted); another test's key still
+/// open keeps the parent.
+pub fn remove_test_key(key: &str) -> bool {
+    let ok = key.strip_prefix(TEST_ROOT).is_some_and(|t| {
+        t.starts_with('\\') && t.len() > 1 && !t.contains("..") && name_ok(key, true)
+    });
+    if !ok {
+        return false;
+    }
+    imp::delete_tree(key);
+    imp::delete_empty_key(TEST_ROOT);
+    true
+}
+
 /// Start with Windows, on: the real Run key.
 pub fn enable(exe: &Path) -> Result<(), String> {
     enable_at(RUN_KEY, RUN_VALUE, exe)
@@ -93,8 +112,8 @@ mod imp {
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
     use windows_sys::Win32::System::Registry::{
         HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
-        RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW,
-        RegSetValueExW,
+        RegCloseKey, RegCreateKeyExW, RegDeleteKeyW, RegDeleteTreeW, RegDeleteValueW,
+        RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
     };
 
     fn w(s: &str) -> Vec<u16> {
@@ -168,6 +187,19 @@ mod imp {
         Ok(())
     }
 
+    pub fn delete_tree(key: &str) {
+        let k = w(key);
+        // SAFETY: a NUL-terminated name; the caller has checked it lies under HubTest.
+        unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, k.as_ptr()) };
+    }
+
+    /// `RegDeleteKeyW` removes a key only when it has no subkeys.
+    pub fn delete_empty_key(key: &str) {
+        let k = w(key);
+        // SAFETY: as above.
+        unsafe { RegDeleteKeyW(HKEY_CURRENT_USER, k.as_ptr()) };
+    }
+
     pub fn get(key: &str, value: &str) -> Option<String> {
         let (k, n) = (w(key), w(value));
         let mut h: HKEY = std::ptr::null_mut();
@@ -229,6 +261,8 @@ mod imp {
     pub fn get(_: &str, _: &str) -> Option<String> {
         None
     }
+    pub fn delete_tree(_: &str) {}
+    pub fn delete_empty_key(_: &str) {}
 }
 
 #[cfg(all(test, windows))]
@@ -236,7 +270,6 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
-    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RegDeleteTreeW};
 
     /// `HKCU\Software\HubTest\autostart-<pid>-<n>`, deleted when dropped.
     struct TestKey(String);
@@ -256,9 +289,7 @@ mod tests {
     }
     impl Drop for TestKey {
         fn drop(&mut self) {
-            let p: Vec<u16> = self.0.encode_utf16().chain(Some(0)).collect();
-            // SAFETY: removes only this test's own key.
-            unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, p.as_ptr()) };
+            assert!(remove_test_key(&self.0));
         }
     }
 
@@ -310,6 +341,33 @@ mod tests {
         // Removing what is not there, or from a key that is not there, is success.
         disable_at(&k.0, "Hub").unwrap();
         disable_at(&format!("{}\\nothing", k.0), "Hub").unwrap();
+    }
+
+    #[test]
+    fn a_test_key_is_removed_with_its_parent_and_the_run_key_never() {
+        let k = TestKey::new();
+        enable_at(&k.0, "Hub", &exe()).unwrap();
+        assert!(is_enabled_at(&k.0, "Hub"));
+        // The only key a test may remove is one under HubTest.
+        for bad in [
+            RUN_KEY,
+            TEST_ROOT,
+            r"Software\HubTestX",
+            "Software\\HubTest\\",
+            r"Software\HubTest\..\Microsoft",
+            "",
+        ] {
+            assert!(!remove_test_key(bad), "{bad:?}");
+        }
+        assert!(is_enabled_at(&k.0, "Hub"), "refused: nothing removed");
+        // A key of this test alone: it and the empty HubTest go. (Other tests' keys running at
+        // the same time keep HubTest, so this only checks what is this test's own.)
+        assert!(remove_test_key(&k.0));
+        assert!(!is_enabled_at(&k.0, "Hub"));
+        let name = format!("{TEST_ROOT}\\parent-{}", std::process::id());
+        enable_at(&name, "Hub", &exe()).unwrap();
+        assert!(remove_test_key(&name));
+        assert!(imp::get(&name, "Hub").is_none());
     }
 
     #[test]

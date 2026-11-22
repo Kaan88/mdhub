@@ -504,7 +504,7 @@ mod tests {
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
     use windows_sys::Win32::System::Registry::{
         HKEY, HKEY_CURRENT_USER, KEY_ALL_ACCESS, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
-        RegCreateKeyExW, RegDeleteTreeW, RegSetValueExW,
+        RegCreateKeyExW, RegSetValueExW,
     };
 
     fn n() -> u32 {
@@ -609,9 +609,8 @@ mod tests {
     }
     impl Drop for TestHive {
         fn drop(&mut self) {
-            let p = w(&self.base);
-            // SAFETY: deletes only this test's own key.
-            unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, p.as_ptr()) };
+            // This test's own key, and the empty HubTest with it.
+            crate::autostart::remove_test_key(&self.base);
         }
     }
 

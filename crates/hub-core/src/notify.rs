@@ -171,8 +171,16 @@ impl Memory {
     /// The rule. Call it once per finished check with everything that has an update; show what it
     /// returns, then save `to_line` if it changed.
     pub fn decide(&mut self, pending: &[Pending]) -> Option<Message> {
+        self.decide_keeping(pending, &[])
+    }
+
+    /// [`decide`](Self::decide) for a check that could not see everything: what was told about
+    /// the names in `unseen` (an app whose release could not be read this time, Hub's own failed
+    /// download) is kept, not forgotten, so the same update is not news again when it is seen
+    /// again. A kept entry is never what makes a balloon.
+    pub fn decide_keeping(&mut self, pending: &[Pending], unseen: &[String]) -> Option<Message> {
         // `=` and `|` are the line's own characters; no name or version carries them.
-        let now: BTreeSet<(String, String)> = pending
+        let mut now: BTreeSet<(String, String)> = pending
             .iter()
             .map(|p| {
                 (
@@ -183,6 +191,16 @@ impl Memory {
             .filter(|(n, _)| !n.is_empty())
             .collect();
         let fresh = now.iter().any(|i| !self.told.contains(i));
+        let unseen: Vec<String> = unseen
+            .iter()
+            .map(|n| clean(n).replace(['=', '|'], "_"))
+            .collect();
+        let known: BTreeSet<String> = now.iter().map(|(n, _)| n.clone()).collect();
+        for (n, v) in &self.told {
+            if unseen.contains(n) && !known.contains(n) {
+                now.insert((n.clone(), v.clone()));
+            }
+        }
         self.told = now;
         if fresh { compose(pending) } else { None }
     }
@@ -194,6 +212,22 @@ mod tests {
 
     fn a(n: &str) -> Pending {
         Pending::app(n, "1.0.0")
+    }
+
+    #[test]
+    fn what_was_told_about_something_not_seen_this_time_is_kept() {
+        let mut m = Memory::new();
+        assert!(m.decide(&[Pending::hub("0.2.0"), a("mdedit")]).is_some());
+        // Hub could not be seen (its manifest was unreachable): its entry is kept, silently.
+        assert_eq!(m.decide_keeping(&[a("mdedit")], &["Hub".to_string()]), None);
+        // Seen again, the same version: told already.
+        assert_eq!(m.decide(&[Pending::hub("0.2.0"), a("mdedit")]), None);
+        // Not kept when it is not unseen: it left, and is news when it returns.
+        assert_eq!(m.decide(&[a("mdedit")]), None);
+        assert!(m.decide(&[Pending::hub("0.2.0"), a("mdedit")]).is_some());
+        // A kept entry never makes a message, and a newer version is news.
+        assert_eq!(m.decide_keeping(&[a("mdedit")], &["Hub".to_string()]), None);
+        assert!(m.decide(&[Pending::hub("0.3.0"), a("mdedit")]).is_some());
     }
 
     #[test]

@@ -5,8 +5,9 @@
 //! folder; the Run value is under `HKCU\Software\HubTest\<unique>`, removed at the end; nothing
 //! of this PC's Hub, apps or registry is touched and nothing is asked of the network.
 use crate::e2e_tests::{Fx, body};
-use crate::glue::{Cmd, Event, RunKey};
+use crate::glue::{Cmd, Event, RunKey, command};
 use crate::settings::{INTERVAL, NOTIFY, START, TRAY, UPDATE_HUB};
+use crate::vm::Hit;
 use hub_core::check;
 use hub_core::selfupdate::Status;
 use mdshared_app::update::sha256_hex;
@@ -111,7 +112,7 @@ fn restart_now_swaps_the_exe_in_and_asks_for_a_restart() {
     let (mut fx, exe) = world("own-swap");
     publish_hub(&fx, "0.2.0", b"new hub bytes");
     fx.check();
-    fx.cmd(Cmd::BannerYes);
+    fx.cmd(Cmd::HubRestart);
     assert_eq!(fx.eng.take_restart().as_deref(), Some(exe.as_path()));
     assert_eq!(std::fs::read(&exe).unwrap(), b"new hub bytes");
     assert!(fx.eng.take_restart().is_none(), "asked once");
@@ -129,7 +130,7 @@ fn an_install_running_defers_the_swap_until_it_is_done() {
     assert!(matches!(fx.eng.hub_status(), Status::Ready(_)));
     fx.cmd(Cmd::Install("mdedit"));
     assert!(fx.eng.installing(), "the install is running");
-    fx.cmd(Cmd::BannerYes);
+    fx.cmd(Cmd::HubRestart);
     // Asked while installing: nothing was touched, nothing restarts yet.
     assert!(fx.eng.take_restart().is_none());
     assert_eq!(std::fs::read(&exe).unwrap(), b"old hub");
@@ -146,7 +147,7 @@ fn later_hides_the_banner_and_quitting_swaps_the_update_in() {
     let (mut fx, exe) = world("own-later");
     publish_hub(&fx, "0.2.0", b"new hub bytes");
     fx.check();
-    fx.cmd(Cmd::BannerNo);
+    fx.cmd(Cmd::HubLater);
     assert!(fx.vm().banner.is_none(), "Later hides it");
     assert!(matches!(fx.eng.hub_status(), Status::Ready(_)));
     // The next check finds the same version already downloaded: it is not fetched again and the
@@ -185,7 +186,7 @@ fn a_staged_file_that_changed_is_refused_and_the_exe_stays() {
     publish_hub(&fx, "0.2.0", b"new hub bytes");
     fx.check();
     std::fs::write(staged_of(&exe), b"something else").unwrap();
-    fx.cmd(Cmd::BannerYes);
+    fx.cmd(Cmd::HubRestart);
     assert!(fx.eng.take_restart().is_none());
     assert_eq!(std::fs::read(&exe).unwrap(), b"old hub");
     assert!(matches!(fx.eng.hub_status(), Status::Failed(_)));
@@ -234,6 +235,96 @@ fn hubs_own_update_counts_in_the_badge_but_not_in_update_all() {
             .any(|e| matches!(e, crate::tray::Entry::Item { label, .. } if label.starts_with("Update all"))),
         "no apps to update"
     );
+}
+
+#[test]
+fn a_click_that_answers_an_app_banner_never_answers_hubs_restart_bar() {
+    let (mut fx, exe) = world("own-banner-double");
+    publish_hub(&fx, "0.2.0", b"new hub bytes");
+    fx.check();
+    // Hub's bar is showing, and its buttons are Hub's own commands.
+    let vm = fx.vm();
+    assert!(vm.banner.as_ref().is_some_and(|b| b.hub));
+    assert_eq!(command(Hit::BannerYes, &vm), Some(Cmd::HubRestart));
+    assert_eq!(command(Hit::BannerNo, &vm), Some(Cmd::HubLater));
+    // The second click of a double-click on an app's "Close and update" arrives after that bar
+    // is gone and Hub's has taken its place: it answers nothing.
+    fx.cmd(Cmd::BannerYes);
+    assert!(
+        fx.eng.take_restart().is_none(),
+        "no restart nobody asked for"
+    );
+    assert_eq!(std::fs::read(&exe).unwrap(), b"old hub");
+    assert!(matches!(fx.eng.hub_status(), Status::Ready(_)));
+    fx.cmd(Cmd::BannerNo);
+    assert!(fx.vm().banner.is_some(), "and does not dismiss it either");
+    // An app's bar is the other command.
+    let app = crate::vm::Banner::default();
+    let mut vm = fx.vm();
+    vm.banner = Some(app);
+    assert_eq!(command(Hit::BannerYes, &vm), Some(Cmd::BannerYes));
+    assert_eq!(command(Hit::BannerNo, &vm), Some(Cmd::BannerNo));
+}
+
+#[test]
+fn a_failed_look_at_hubs_manifest_does_not_make_the_same_update_news_again() {
+    let (mut fx, exe) = world("tell-hub-failed");
+    let bad_exe = hub_path(&fx, "releases/download/v0.2.0/hub.exe");
+    publish_hub(&fx, "0.2.0", b"new hub bytes");
+    std::fs::write(&bad_exe, b"not the file").unwrap();
+    fx.check();
+    assert!(matches!(fx.eng.hub_status(), Status::Failed(_)));
+    assert_eq!(fx.eng.take_message().unwrap().body, "1 update: Hub");
+    // Hub's manifest cannot be read at the next check: Hub's status stays failed, nothing said.
+    let manifest = hub_path(&fx, "releases/latest/download/hub-update.txt");
+    let kept = std::fs::read(&manifest).unwrap();
+    std::fs::remove_file(&manifest).unwrap();
+    fx.check();
+    assert!(matches!(fx.eng.hub_status(), Status::Failed(_)));
+    assert!(fx.eng.take_message().is_none());
+    // It is readable again and offers the same version: the user was told already.
+    std::fs::write(&manifest, kept).unwrap();
+    fx.check();
+    assert!(
+        fx.eng.take_message().is_none(),
+        "the same Hub, told once, is not told again"
+    );
+    assert!(!staged_of(&exe).exists());
+}
+
+#[test]
+fn no_second_check_starts_while_hubs_own_download_is_still_running() {
+    let mut fx = Fx::with_delay("own-double-download", Duration::from_millis(400));
+    let exe = scratch_exe(&fx);
+    fx.eng.set_hub_exe(Some(exe.clone()));
+    publish_hub(&fx, "0.2.0", b"new hub bytes");
+    fx.cmd(Cmd::CheckNow);
+    // Until the check has reported (the apps' answers come after Hub's manifest) and Hub's
+    // download, which goes on after that, is under way.
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while !(matches!(fx.eng.hub_status(), Status::Downloading(_)) && !fx.eng.checking()) {
+        let ev = fx.rx.recv_timeout(Duration::from_millis(100));
+        if let Ok(ev) = ev {
+            fx.eng.handle(ev);
+        }
+        assert!(std::time::Instant::now() < deadline, "never downloading");
+    }
+    assert!(!fx.eng.checking(), "the check itself has reported");
+    // A manual check (F5, the tray) or a timed one now would write the same file twice.
+    fx.cmd(Cmd::CheckNow);
+    assert!(!fx.eng.checking(), "no second check");
+    assert_eq!(fx.eng.wait(check::now()), None, "and no timer to start one");
+    fx.settle();
+    let downloads = hub_urls(&fx)
+        .iter()
+        .filter(|u| u.contains("/releases/download/"))
+        .count();
+    assert_eq!(downloads, 1, "downloaded once");
+    assert!(matches!(fx.eng.hub_status(), Status::Ready(_)));
+    // Once it is done a check runs as usual.
+    fx.cmd(Cmd::CheckNow);
+    assert!(fx.eng.checking());
+    fx.settle();
 }
 
 #[test]
@@ -406,11 +497,8 @@ impl TestKey {
 #[cfg(windows)]
 impl Drop for TestKey {
     fn drop(&mut self) {
-        // Only ever this test's own key, under HubTest.
-        assert!(self.0.starts_with(r"Software\HubTest\"));
-        let _ = std::process::Command::new("reg")
-            .args(["delete", &format!(r"HKCU\{}", self.0), "/f"])
-            .output();
+        // Only ever this test's own key, under HubTest; the empty HubTest goes with it.
+        assert!(hub_core::autostart::remove_test_key(&self.0));
     }
 }
 
@@ -468,6 +556,66 @@ fn a_copy_with_no_exe_to_start_refuses_start_with_windows_and_says_why() {
         "{}",
         fx.vm().checked
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn a_copy_with_no_exe_does_not_touch_the_startup_list_when_turning_it_off_either() {
+    let mut fx = Fx::new("set-start-off-refused");
+    let key = TestKey::new();
+    // Someone (the installed Hub) wrote the value; this copy is a build folder's.
+    hub_core::autostart::enable_at(&key.0, "Hub", &scratch_exe(&fx)).unwrap();
+    fx.eng.set_run_key(RunKey {
+        key: key.0.clone(),
+        value: "Hub".into(),
+        exe: None,
+    });
+    assert!(fx.eng.change_setting(START, Value::Bool(false)));
+    assert!(
+        hub_core::autostart::is_enabled_at(&key.0, "Hub"),
+        "the installed Hub's value is not this copy's to remove"
+    );
+    assert!(
+        fx.vm()
+            .checked
+            .starts_with("Could not change Start with Windows"),
+        "{}",
+        fx.vm().checked
+    );
+}
+
+#[test]
+fn the_run_key_a_build_gets_is_never_the_real_one_unless_it_is_installed() {
+    use crate::glue::run_key_for;
+    use hub_core::autostart::{RUN_KEY, TEST_ROOT};
+    let scratch = Some(PathBuf::from(r"C:\scratch\h\hub.exe"));
+    let test_key = format!("{TEST_ROOT}\\unique-1");
+    // A normal build: the real key for the installed Hub, none for a build folder's copy.
+    let k = run_key_for(false, None, scratch.clone(), scratch.clone());
+    assert_eq!((k.key.as_str(), k.exe.clone()), (RUN_KEY, scratch.clone()));
+    assert_eq!(run_key_for(false, None, scratch.clone(), None).key, "");
+    // A test-hooks build (a scratch copy of the exe counts as installed): no key without the
+    // variable, the test key with it, and never the real Run key or anything outside HubTest.
+    assert_eq!(
+        run_key_for(true, None, scratch.clone(), scratch.clone()).key,
+        ""
+    );
+    let k = run_key_for(
+        true,
+        Some(test_key.clone()),
+        scratch.clone(),
+        scratch.clone(),
+    );
+    assert_eq!((k.key, k.exe), (test_key, scratch.clone()));
+    for bad in [RUN_KEY, TEST_ROOT, "Software\\HubTestX\\a", ""] {
+        let k = run_key_for(
+            true,
+            Some(bad.to_string()),
+            scratch.clone(),
+            scratch.clone(),
+        );
+        assert_eq!((k.key.as_str(), k.exe), ("", None), "{bad:?}");
+    }
 }
 
 #[test]

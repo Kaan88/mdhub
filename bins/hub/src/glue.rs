@@ -136,13 +136,21 @@ pub struct RunKey {
 
 impl RunKey {
     /// The real Run key, for the installed Hub. A copy that is not installed (a cargo build
-    /// folder) has no exe to put there, so the setting is refused rather than writing the path of
-    /// a build output into the owner's startup list.
+    /// folder) has no exe to put there, and no business with the key at all: it gets no key, so
+    /// it neither writes a build output's path into the owner's startup list nor removes (or
+    /// shows) the value the installed Hub wrote.
     pub fn real() -> RunKey {
-        RunKey {
-            key: hub_core::autostart::RUN_KEY.to_string(),
-            value: hub_core::autostart::RUN_VALUE.to_string(),
-            exe: selfupdate::installed_exe(),
+        RunKey::real_for(selfupdate::installed_exe())
+    }
+
+    fn real_for(installed: Option<PathBuf>) -> RunKey {
+        match installed {
+            Some(exe) => RunKey {
+                key: hub_core::autostart::RUN_KEY.to_string(),
+                value: hub_core::autostart::RUN_VALUE.to_string(),
+                exe: Some(exe),
+            },
+            None => RunKey::none(),
         }
     }
 
@@ -160,18 +168,40 @@ impl RunKey {
 /// `HUB_RUN_KEY_PATH` names a key under `HKCU` (a test's own, never the real Run key) and the
 /// value is started from this very exe.
 pub fn system_run_key() -> RunKey {
-    #[cfg(feature = "test-hooks")]
-    if let Some(k) = std::env::var("HUB_RUN_KEY_PATH")
-        .ok()
-        .filter(|k| !k.is_empty())
-    {
-        return RunKey {
-            key: k,
-            value: hub_core::autostart::RUN_VALUE.to_string(),
-            exe: std::env::current_exe().ok(),
-        };
+    run_key_for(
+        cfg!(feature = "test-hooks"),
+        std::env::var("HUB_RUN_KEY_PATH").ok(),
+        std::env::current_exe().ok(),
+        selfupdate::installed_exe(),
+    )
+}
+
+/// [`system_run_key`] with its inputs given. A `test_hooks` build never reaches the real Run key:
+/// without `HUB_RUN_KEY_PATH` it has no key at all (a scratch copy of the exe counts as installed,
+/// so it would otherwise write the owner's startup list), and a path outside `HKCU\Software\HubTest`
+/// is refused the same way.
+pub(crate) fn run_key_for(
+    test_hooks: bool,
+    env: Option<String>,
+    current: Option<PathBuf>,
+    installed: Option<PathBuf>,
+) -> RunKey {
+    if !test_hooks {
+        return RunKey::real_for(installed);
     }
-    RunKey::real()
+    match env {
+        Some(k)
+            if k.strip_prefix(hub_core::autostart::TEST_ROOT)
+                .is_some_and(|t| t.starts_with('\\') && t.len() > 1) =>
+        {
+            RunKey {
+                key: k,
+                value: hub_core::autostart::RUN_VALUE.to_string(),
+                exe: current,
+            }
+        }
+        _ => RunKey::none(),
+    }
 }
 
 /// The detection environment: the PC's own, except in a build with `test-hooks`, where
@@ -439,6 +469,10 @@ pub enum Cmd {
     MenuPick(&'static str, MenuItem),
     BannerYes,
     BannerNo,
+    /// "Restart now" on Hub's own bar (or the About button).
+    HubRestart,
+    /// "Later" on Hub's own bar.
+    HubLater,
     FocusFilter,
     FilterChar(char),
     FilterBack,
@@ -481,8 +515,16 @@ pub fn command(hit: Hit, vm: &Vm) -> Option<Cmd> {
         Hit::Row(i) => id(i).map(|_| Cmd::Select(i)),
         Hit::Action(i, act) => id(i).map(|id| act_cmd(id, act)),
         Hit::Menu(i) => id(i).map(|_| Cmd::OpenMenu(i)),
-        Hit::BannerYes => Some(Cmd::BannerYes),
-        Hit::BannerNo => Some(Cmd::BannerNo),
+        // The bar over the list is an app's question or Hub's own "Restart now"; which one it is
+        // decides the command, so a stale or doubled click never answers the other bar.
+        Hit::BannerYes => Some(match &vm.banner {
+            Some(b) if b.hub => Cmd::HubRestart,
+            _ => Cmd::BannerYes,
+        }),
+        Hit::BannerNo => Some(match &vm.banner {
+            Some(b) if b.hub => Cmd::HubLater,
+            _ => Cmd::BannerNo,
+        }),
         Hit::Drag | Hit::Min | Hit::Max | Hit::Close | Hit::Settings | Hit::None => None,
     }
 }
@@ -893,6 +935,7 @@ impl Engine {
                     yes: "Close and update".into(),
                     no: "Not now".into(),
                     warn: false,
+                    hub: false,
                 })
             })
             // Hub's own update, once it is downloaded: after an app's question, never over it.
@@ -902,6 +945,7 @@ impl Engine {
                     yes: "Restart now".into(),
                     no: "Later".into(),
                     warn: false,
+                    hub: true,
                 })
             });
         let checked = if self.checking {
@@ -1012,7 +1056,7 @@ impl Engine {
 
     /// How long the loop may sleep before the engine wants to run again; None: not on a timer.
     pub fn wait(&self, now: u64) -> Option<Duration> {
-        if self.fixed.is_some() || self.checking {
+        if self.fixed.is_some() || self.checking || self.own_downloading() {
             return None;
         }
         check_wait(
@@ -1169,14 +1213,17 @@ impl Engine {
                     self.enqueue(id, JobKind::Install);
                     true
                 }
-                // No app is asking: the bar is Hub's own, "Restart now".
-                None => self.hub_restart(),
+                // No app is asking (a second click of a double-click): nothing to answer. Hub's
+                // own bar has its own command.
+                None => false,
             },
             Cmd::BannerNo => {
                 self.pending_close.clear();
-                if self.banner.take().is_some() {
-                    true
-                } else if self.hub_banner_shown() {
+                self.banner.take().is_some()
+            }
+            Cmd::HubRestart => self.hub_restart(),
+            Cmd::HubLater => {
+                if self.hub_banner_shown() {
                     self.own.dismissed = true;
                     true
                 } else {
@@ -1385,8 +1432,16 @@ impl Engine {
         }
     }
 
+    /// Hub's own update is being downloaded by the check that found it. That download goes on
+    /// after the check itself has reported (`Event::Checked`), so `checking` is already false.
+    fn own_downloading(&self) -> bool {
+        matches!(self.own.status, Status::Downloading(_))
+    }
+
     fn start_check(&mut self) -> bool {
-        if self.checking || self.fixed.is_some() {
+        // Not while Hub's own file is being written: a second check would start a second download
+        // of the same file under the first one.
+        if self.checking || self.own_downloading() || self.fixed.is_some() {
             return false;
         }
         self.first = None;
@@ -1610,6 +1665,22 @@ impl Engine {
         v
     }
 
+    /// Whose update status the last check could not see: Hub when its own download failed, an
+    /// app whose release could not be read. What was told about them is kept (`decide_keeping`),
+    /// so the same update is not announced again when it is seen again.
+    fn unseen_names(&self) -> Vec<String> {
+        let mut v = Vec::new();
+        if matches!(self.own.status, Status::Failed(_)) {
+            v.push("Hub".to_string());
+        }
+        for s in &self.slots {
+            if !matches!(s.latest, Latest::Found(_)) {
+                v.push(s.app.name.to_string());
+            }
+        }
+        v
+    }
+
     /// After a check: is there news the user was not told? Never when notifications are off or
     /// there is no icon to tell it with (the memory is left alone then, so the news is told
     /// later), and not when the user is looking at the window (it counts as told).
@@ -1619,7 +1690,10 @@ impl Engine {
             return;
         }
         let before = self.tell.mem.to_line();
-        let msg = self.tell.mem.decide(&self.pending_set());
+        let msg = self
+            .tell
+            .mem
+            .decide_keeping(&self.pending_set(), &self.unseen_names());
         let line = self.tell.mem.to_line();
         if line != before {
             self.store.set_notified(&line);
@@ -1697,13 +1771,11 @@ impl Engine {
             return;
         }
         let (key, value) = (self.run_key.key.as_str(), self.run_key.value.as_str());
-        let r = if on {
-            match &self.run_key.exe {
-                Some(exe) => hub_core::autostart::enable_at(key, value, exe),
-                None => Err("this copy of Hub is not installed".to_string()),
-            }
-        } else {
-            hub_core::autostart::disable_at(key, value)
+        // A copy that cannot be started at login has no say in the startup list, either way.
+        let r = match &self.run_key.exe {
+            Some(exe) if on => hub_core::autostart::enable_at(key, value, exe),
+            Some(_) => hub_core::autostart::disable_at(key, value),
+            None => Err("this copy of Hub is not installed".to_string()),
         };
         match r {
             Ok(()) => {

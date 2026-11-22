@@ -256,6 +256,7 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
                 yes: "Restart now".into(),
                 no: "Later".into(),
                 warn: false,
+                hub: true,
             });
             v.hub_version = "0.1.0 (0.2.0 ready)".into();
             v.hover = Some(1);

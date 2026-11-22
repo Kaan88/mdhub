@@ -121,6 +121,9 @@ struct App {
     settings: Option<Form>,
     /// Hub's own update was swapped in: when the loop ends, this exe is started.
     restart_exe: Option<std::path::PathBuf>,
+    /// No window was open when the restart was asked for: the new Hub comes back as it was, under
+    /// the tray, not with a window nobody asked for.
+    restart_windowless: bool,
     /// The tray is wanted and not started yet (a window-first launch starts it after the first
     /// frame). Cleared by the attempt.
     want_tray: bool,
@@ -496,7 +499,7 @@ impl App {
         };
         if matches!(self.engine.hub_status(), selfupdate::Status::Ready(_)) && !marker.exists() {
             let _ = std::fs::write(&marker, b"restarted");
-            self.apply(Cmd::BannerYes);
+            self.apply(Cmd::HubRestart);
         }
     }
 
@@ -507,6 +510,7 @@ impl App {
     fn check_restart(&mut self) {
         if let Some(exe) = self.engine.take_restart() {
             self.restart_exe = Some(exe);
+            self.restart_windowless = self.window.is_none();
             self.exit_now = true;
         }
     }
@@ -1168,6 +1172,7 @@ pub fn run(mut args: Args, started: Instant) -> i32 {
         last_snap: Snapshot::default(),
         settings: None,
         restart_exe: None,
+        restart_windowless: false,
         opens: 0,
         single,
     };
@@ -1185,7 +1190,7 @@ pub fn run(mut args: Args, started: Instant) -> i32 {
     // Hub's own update was swapped in: the window is closed, the icon is gone, the single-instance
     // lock goes with this process; the new Hub waits for that (`--restarted`).
     if let Some(exe) = app.restart_exe.take() {
-        restart_hub(&exe, &app.args);
+        restart_hub(&exe, &app.args, app.restart_windowless);
     }
     match result {
         Ok(()) => 0,
@@ -1196,23 +1201,29 @@ pub fn run(mut args: Args, started: Instant) -> i32 {
     }
 }
 
-/// Starts the new Hub from `exe` the way Hub was running: under the tray when it was started
-/// with `--tray` (and the test flags `--behind`, `--no-tray` as they were). Nothing is started
-/// when `exe` is not there; the old Hub has ended by then and the next launch is the new one.
-fn restart_hub(exe: &std::path::Path, args: &Args) {
+/// The flags the new Hub is started with: `--tray` when the old one had no window open (it comes
+/// back as the icon it was; a Hub whose window is open comes back with a window, whatever started
+/// it), and the test flags `--behind`, `--no-tray` as they were.
+fn restart_flags(args: &Args, windowless: bool) -> Vec<&'static str> {
+    [
+        (windowless && !args.no_tray, "--tray"),
+        (args.behind, "--behind"),
+        (args.no_tray, "--no-tray"),
+    ]
+    .into_iter()
+    .filter(|(on, _)| *on)
+    .map(|(_, f)| f)
+    .collect()
+}
+
+/// Starts the new Hub from `exe` (see [`restart_flags`]). Nothing is started when `exe` is not
+/// there; the old Hub has ended by then and the next launch is the new one.
+fn restart_hub(exe: &std::path::Path, args: &Args, windowless: bool) {
     let Some(target) = selfupdate::restart_target(exe) else {
         return;
     };
     let mut cmd = mdshared_app::relaunch::command(&target);
-    for (on, flag) in [
-        (args.tray, "--tray"),
-        (args.behind, "--behind"),
-        (args.no_tray, "--no-tray"),
-    ] {
-        if on {
-            cmd.arg(flag);
-        }
-    }
+    cmd.args(restart_flags(args, windowless));
     let _ = cmd.spawn();
 }
 
@@ -1254,6 +1265,28 @@ mod tests {
             .expect("the request arrives before the wake-up");
         assert_eq!(got.from.as_deref(), Some(QUIT_FROM));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_restart_comes_back_under_the_tray_only_when_no_window_was_open() {
+        let tray_start = Args {
+            tray: true,
+            behind: true,
+            ..Default::default()
+        };
+        // Started by the Run key, window closed: back as the icon.
+        assert_eq!(restart_flags(&tray_start, true), ["--tray", "--behind"]);
+        // The same Hub with its window opened from the icon: back with a window.
+        assert_eq!(restart_flags(&tray_start, false), ["--behind"]);
+        // Started with a window, then closed to the tray: not back with a window nobody asked for.
+        assert_eq!(restart_flags(&Args::default(), true), ["--tray"]);
+        assert!(restart_flags(&Args::default(), false).is_empty());
+        // No tray at all: never `--tray`.
+        let no_tray = Args {
+            no_tray: true,
+            ..Default::default()
+        };
+        assert_eq!(restart_flags(&no_tray, true), ["--no-tray"]);
     }
 
     #[test]

@@ -41,6 +41,9 @@ pub struct Banner {
     pub yes: String,
     pub no: String,
     pub warn: bool,
+    /// The bar is Hub's own ("Restart now"), not an app's question: a click on it is a
+    /// different command, so a second click of a double-click cannot land on the other bar.
+    pub hub: bool,
 }
 
 #[derive(Clone, Debug, Default)]
