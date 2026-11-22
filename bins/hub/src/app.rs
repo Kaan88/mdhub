@@ -9,6 +9,7 @@ use crate::glue::{
     repeatable,
 };
 use crate::trace::Trace;
+use crate::tray::{self, Do, Input, Life, Snapshot, TrayCmd};
 use crate::view::{self, HEAD_H, ROW_H};
 use crate::vm::{Hit, Layout, View, Vm};
 use hub_core::check;
@@ -81,7 +82,9 @@ struct App {
     window: Option<Rc<Window>>,
     surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
     bmp: Bitmap,
-    gfx: Gfx,
+    /// Fonts and glyph caches: made with the first frame of a window, dropped with the window,
+    /// so a Hub that lives under the tray holds none.
+    gfx: Option<Gfx>,
     scale: f32,
     system_dark: bool,
     /// What the last frame drew, for the next click.
@@ -104,9 +107,33 @@ struct App {
     shown: bool,
     exit_at: Option<Instant>,
     last_running: Instant,
-    /// Kept for as long as the window lives (the second-launch listener sends into it).
-    _single: Option<std::sync::mpsc::Receiver<std::path::PathBuf>>,
+    /// What exists: a window, and a tray that keeps the process alive without one (`tray::step`).
+    life: Life,
+    /// The tray icon, when there is one (`--no-tray`, `tray = 0` and a failure give none).
+    tray: Option<tray::Tray>,
+    /// The last snapshot the tray was given: a new one is sent only when it differs.
+    last_snap: Snapshot,
+    /// "Notify about updates" (setting `notify`, default on).
+    notify: bool,
+    /// What the menu's "Start with Windows" shows (the settings record; the registry is the
+    /// start-with-Windows work's).
+    start_with_windows: bool,
+    /// The tray is wanted and not started yet (a window-first launch starts it after the first
+    /// frame). Cleared by the attempt.
+    want_tray: bool,
+    /// What the tray thread posts into.
+    post: Arc<dyn Post>,
+    /// How many windows have been made in this process.
+    opens: u32,
+    /// Kept for as long as the process lives: what second launches asked for. A request from
+    /// `hub --quit` arrives here (`QUIT_FROM`); a plain second launch only wakes the loop.
+    single: Option<std::sync::mpsc::Receiver<mdshared_app::sister::Request>>,
 }
+
+/// The `from` of the request `hub --quit` sends to the running Hub (a second launch has nothing
+/// else to say, and the single-instance channel carries file requests: this one is told apart by
+/// its sender's name, with `unplace` set so the listener delivers it though it names no file).
+const QUIT_FROM: &str = "hub-quit";
 
 fn hwnd(w: &Window) -> Option<isize> {
     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -227,7 +254,8 @@ impl App {
         self.max_scroll = geo.max_scroll;
         self.scroll = self.scroll.clamp(0.0, self.max_scroll);
         let maximized = window.is_maximized();
-        let mut p = Painter::new(&mut self.bmp, &mut self.gfx, self.scale);
+        let gfx = self.gfx.get_or_insert_with(Gfx::new);
+        let mut p = Painter::new(&mut self.bmp, gfx, self.scale);
         let layout = view::draw_scrolled(&mut p, &pal, lw, lh, &vm, self.scroll);
         let _ = maximized;
         if let Some(pop) = &self.popup {
@@ -332,7 +360,7 @@ impl App {
             }
             Hit::Min => window.set_minimized(true),
             Hit::Max => window.set_maximized(!window.is_maximized()),
-            Hit::Close => self.request_exit(),
+            Hit::Close => self.request_close(),
             Hit::None => {
                 // A click on nothing leaves the filter box.
                 self.apply(Cmd::FilterBlur);
@@ -455,88 +483,52 @@ fn draw_popup(p: &mut Painter, pal: &Palette, pop: &Popup) {
 
 impl ApplicationHandler<Event> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_some() {
+        if self.window.is_some() || !self.life.window {
+            // Started under the tray (`--tray`): no window until one is asked for.
+            if !self.life.window {
+                self.trace.stage("started under the tray, no window");
+                self.trace.memory("tray only");
+                self.trace.cpu("tray only");
+            }
             return;
         }
-        let (w, h) = self.args.size.unwrap_or(DEFAULT_SIZE);
-        let mut attributes = Window::default_attributes()
-            .with_title("Hub")
-            .with_decorations(false)
-            .with_visible(false)
-            .with_inner_size(LogicalSize::new(
-                w.max(MIN_SIZE.0) as f64,
-                h.max(MIN_SIZE.1) as f64,
-            ))
-            .with_min_inner_size(LogicalSize::new(MIN_SIZE.0 as f64, MIN_SIZE.1 as f64))
-            .with_undecorated_shadow(true);
-        // A test run: shown without the focus and kept under every other window.
-        if self.args.behind {
-            attributes = attributes
-                .with_active(false)
-                .with_window_level(WindowLevel::AlwaysOnBottom);
-        }
-        let window = match event_loop.create_window(attributes) {
-            Ok(w) => Rc::new(w),
-            Err(e) => {
-                eprintln!("hub: no window: {e}");
-                event_loop.exit();
-                return;
-            }
-        };
-        self.trace.stage("window created");
-        self.scale = window.scale_factor() as f32;
-        if let Some(h) = hwnd(&window) {
-            mdshared_ui::platform::style_window(h, self.dark());
-        }
-        let surface = softbuffer::Context::new(window.clone())
-            .and_then(|c| softbuffer::Surface::new(&c, window.clone()));
-        match surface {
-            Ok(s) => self.surface = Some(s),
-            Err(e) => {
-                eprintln!("hub: no surface: {e}");
-                event_loop.exit();
-                return;
-            }
-        }
-        self.window = Some(window.clone());
-        self.trace.stage("surface");
-        // The first frame is drawn while the window is hidden, then the window is shown.
-        self.draw();
-        self.trace.stage("first frame drawn");
-        window.set_visible(true);
-        if self.args.behind {
-            // Showing a window raises it, so a test run's window is sent under the others again
-            // (winit skips a level that has not changed, hence Normal first).
-            window.set_window_level(WindowLevel::Normal);
-            window.set_window_level(WindowLevel::AlwaysOnBottom);
-        }
-        // The frame went to a hidden window, which shows nothing: send it again.
-        self.present();
-        self.first = true;
-        self.shown = true;
-        self.trace
-            .line(&format!("first frame after {:.1} ms", self.trace.since()));
-        self.trace.memory("first frame");
-        self.trace.cpu("first frame");
+        self.create_window(event_loop);
     }
 
-    fn user_event(&mut self, _: &ActiveEventLoop, ev: Event) {
-        if matches!(ev, Event::Raise) {
-            self.raise();
-            return;
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, ev: Event) {
+        match ev {
+            Event::Raise => {
+                if self.quit_requested() {
+                    self.trace.stage("quit requested by another launch");
+                    self.request_exit();
+                } else {
+                    self.open(event_loop);
+                }
+            }
+            Event::Tray(cmd) => self.tray_command(event_loop, cmd),
+            ev => {
+                if self.engine.handle(ev) {
+                    self.dirty = true;
+                }
+                self.sync_tray();
+            }
         }
-        if self.engine.handle(ev) {
-            self.dirty = true;
+        if self.exit_now {
+            self.finish(event_loop);
         }
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        // A late event of a window that was destroyed is not this window's.
+        if self.window.as_ref().map(|w| w.id()) != Some(id) {
+            return;
+        }
         if self.popup.is_some() && closes_popup(&event) {
             self.popup = None;
             self.dirty = true;
         }
         match event {
-            WindowEvent::CloseRequested => self.request_exit(),
+            WindowEvent::CloseRequested => self.request_close(),
             WindowEvent::RedrawRequested => self.draw(),
             WindowEvent::Resized(_) => {
                 self.dirty = true;
@@ -606,16 +598,27 @@ impl ApplicationHandler<Event> for App {
             return;
         }
         let now = check::now();
-        if self.shown {
-            if std::mem::take(&mut self.first) {
-                // After the first frame: which apps run (one pass over the process list).
-                self.last_running = Instant::now();
-                self.engine.refresh_running_async();
-                self.trace.stage("running apps looked up");
-            }
-            if self.engine.tick(now) {
-                self.dirty = true;
-            }
+        // Nothing runs before the first frame of a window; with no window at all (under the tray)
+        // the engine keeps its schedule and the next check starts when it is due.
+        let live = self.shown || self.window.is_none();
+        if self.shown && std::mem::take(&mut self.first) {
+            // After the first frame: which apps run (one pass over the process list).
+            self.last_running = Instant::now();
+            self.engine.refresh_running_async();
+            self.trace.stage("running apps looked up");
+        }
+        if self.want_tray && self.shown {
+            // A window-first launch: the icon comes after the first frame, never before it.
+            self.want_tray = false;
+            self.start_tray();
+        }
+        if live && self.engine.tick(now) {
+            self.dirty = true;
+        }
+        if let Some(text) = self.args.tray_test_balloon.take()
+            && let Some(t) = &self.tray
+        {
+            t.show_balloon("Hub", &text);
         }
         if self.dirty
             && let Some(w) = &self.window
@@ -626,7 +629,7 @@ impl ApplicationHandler<Event> for App {
         if let Some(t) = self.closing {
             until = Some(until.map_or(t, |u| u.min(t)));
         }
-        if let Some(d) = self.engine.wait(now).filter(|_| self.shown) {
+        if let Some(d) = self.engine.wait(now).filter(|_| live) {
             let t = Instant::now() + d.min(MAX_SLEEP);
             until = Some(until.map_or(t, |u| u.min(t)));
         }
@@ -638,7 +641,203 @@ impl ApplicationHandler<Event> for App {
 }
 
 impl App {
-    /// The close button, Alt+F4: leaves at once unless an install or a roll back is running. That
+    /// Makes the window, draws its first frame hidden, shows it. Everything a window costs
+    /// (surface, bitmap, fonts) is made here and given back by [`App::destroy_window`]. A failure
+    /// is `Input::OpenFailed`: with no tray that ends the process.
+    fn create_window(&mut self, event_loop: &ActiveEventLoop) {
+        let opened = Instant::now();
+        let (w, h) = self.args.size.unwrap_or(DEFAULT_SIZE);
+        let mut attributes = Window::default_attributes()
+            .with_title("Hub")
+            .with_decorations(false)
+            .with_visible(false)
+            .with_inner_size(LogicalSize::new(
+                w.max(MIN_SIZE.0) as f64,
+                h.max(MIN_SIZE.1) as f64,
+            ))
+            .with_min_inner_size(LogicalSize::new(MIN_SIZE.0 as f64, MIN_SIZE.1 as f64))
+            .with_undecorated_shadow(true);
+        // A test run: shown without the focus and kept under every other window.
+        if self.args.behind {
+            attributes = attributes
+                .with_active(false)
+                .with_window_level(WindowLevel::AlwaysOnBottom);
+        }
+        let window = match event_loop.create_window(attributes) {
+            Ok(w) => Rc::new(w),
+            Err(e) => {
+                eprintln!("hub: no window: {e}");
+                self.window_failed();
+                return;
+            }
+        };
+        self.trace.stage("window created");
+        self.scale = window.scale_factor() as f32;
+        if let Some(h) = hwnd(&window) {
+            mdshared_ui::platform::style_window(h, self.dark());
+        }
+        let surface = softbuffer::Context::new(window.clone())
+            .and_then(|c| softbuffer::Surface::new(&c, window.clone()));
+        match surface {
+            Ok(s) => self.surface = Some(s),
+            Err(e) => {
+                eprintln!("hub: no surface: {e}");
+                self.window_failed();
+                return;
+            }
+        }
+        self.window = Some(window.clone());
+        self.trace.stage("surface");
+        // The first frame is drawn while the window is hidden, then the window is shown.
+        self.draw();
+        self.trace.stage("first frame drawn");
+        window.set_visible(true);
+        if self.args.behind {
+            // Showing a window raises it, so a test run's window is sent under the others again
+            // (winit skips a level that has not changed, hence Normal first).
+            window.set_window_level(WindowLevel::Normal);
+            window.set_window_level(WindowLevel::AlwaysOnBottom);
+        }
+        // The frame went to a hidden window, which shows nothing: send it again.
+        self.present();
+        self.first = true;
+        self.shown = true;
+        self.opens += 1;
+        if self.opens == 1 && !self.args.tray {
+            self.trace
+                .line(&format!("first frame after {:.1} ms", self.trace.since()));
+        } else {
+            self.trace.line(&format!(
+                "window opened: first frame after {:.1} ms",
+                opened.elapsed().as_secs_f64() * 1000.0
+            ));
+        }
+        self.trace.memory("window open");
+        self.trace.cpu("window open");
+    }
+
+    /// Starts the tray icon (once). False when it could not be made: Hub then has no tray.
+    fn start_tray(&mut self) -> bool {
+        if self.tray.is_some() {
+            return true;
+        }
+        let snap = self
+            .engine
+            .tray_snapshot(check::now(), self.notify, self.start_with_windows);
+        match tray::Tray::start(self.post.clone(), snap.clone()) {
+            Some(t) => {
+                self.tray = Some(t);
+                self.last_snap = snap;
+                self.trace.stage("tray icon up");
+                self.trace.memory("tray up");
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// A window could not be made: the state machine says whether Hub goes on (a tray holds it).
+    fn window_failed(&mut self) {
+        self.life.tray = self.tray.is_some();
+        let (l, d) = tray::step(self.life, Input::OpenFailed);
+        self.life = l;
+        if d == Do::Exit {
+            self.exit_now = true;
+        }
+        self.destroy_window();
+    }
+
+    /// Gives back everything the window cost: the window itself, its surface, the bitmap, the
+    /// fonts and glyph caches. The engine stays: it is what the tray lives on.
+    fn destroy_window(&mut self) {
+        self.popup = None;
+        self.surface = None;
+        self.window = None;
+        self.bmp = Bitmap::new(1, 1);
+        self.gfx = None;
+        self.layout = Layout::default();
+        self.scroll = 0.0;
+        self.max_scroll = 0.0;
+        self.mouse = (-1.0, -1.0);
+        self.cursor = CursorIcon::Default;
+        self.shown = false;
+        self.first = false;
+        self.dirty = false;
+        self.engine.set_hover(None);
+        self.trace.memory("window closed");
+    }
+
+    /// Something asked for the window: the tray, its balloon, a second launch.
+    fn open(&mut self, event_loop: &ActiveEventLoop) {
+        self.life.tray = self.tray.is_some();
+        let (l, d) = tray::step(self.life, Input::Open);
+        self.life = l;
+        match d {
+            Do::Create => self.create_window(event_loop),
+            Do::Raise => self.raise(),
+            _ => {}
+        }
+    }
+
+    /// The window's X or Alt+F4. With the tray on, the window is destroyed and Hub stays (an
+    /// install in progress goes on without it); with none, Hub quits as it always did.
+    fn request_close(&mut self) {
+        self.life.tray = self.tray.is_some();
+        let (l, d) = tray::step(self.life, Input::CloseWindow);
+        match d {
+            Do::Destroy => {
+                self.life = l;
+                self.destroy_window();
+            }
+            Do::Exit => self.request_exit(),
+            _ => self.life = l,
+        }
+    }
+
+    /// Has a second launch asked Hub to quit (`hub --quit`)? Drains what the single-instance
+    /// listener queued.
+    fn quit_requested(&mut self) -> bool {
+        let mut quit = false;
+        if let Some(rx) = &self.single {
+            while let Ok(r) = rx.try_recv() {
+                quit |= r.from.as_deref() == Some(QUIT_FROM);
+            }
+        }
+        quit
+    }
+
+    fn tray_command(&mut self, event_loop: &ActiveEventLoop, cmd: TrayCmd) {
+        match cmd {
+            TrayCmd::Open | TrayCmd::BalloonClicked => self.open(event_loop),
+            TrayCmd::UpdateAll => self.apply(Cmd::UpdateAll),
+            TrayCmd::CheckNow => self.apply(Cmd::CheckNow),
+            TrayCmd::OpenApp(id) => self.apply(Cmd::Open(id)),
+            TrayCmd::ToggleNotify => {
+                self.notify = !self.notify;
+                self.engine.store.set_notify_enabled(self.notify);
+            }
+            // Writing and removing the Run key is the start-with-Windows work (`autostart`); the
+            // menu line is here and its click arrives here. Nothing is written by this build.
+            TrayCmd::ToggleStart => eprintln!("hub: start with Windows is not wired yet"),
+            TrayCmd::Quit => self.request_exit(),
+        }
+        self.sync_tray();
+    }
+
+    /// Gives the tray the engine's current picture (badge, tooltip, menu) when it changed.
+    fn sync_tray(&mut self) {
+        let Some(t) = &self.tray else { return };
+        let s = self
+            .engine
+            .tray_snapshot(check::now(), self.notify, self.start_with_windows);
+        if s != self.last_snap {
+            t.update(s.clone());
+            self.last_snap = s;
+        }
+    }
+
+    /// The close button, Alt+F4 without a tray, "Quit Hub": leaves at once unless an install or a
+    /// roll back is running. That
     /// one is told to stop (it places nothing more, or ends what it is placing) and is waited
     /// for, a few seconds at most; a second close does not wait.
     fn request_exit(&mut self) {
@@ -660,14 +859,34 @@ impl App {
         }
         self.trace.memory("exit");
         self.trace.cpu("exit");
+        // The icon goes before the process does, so no ghost is left in the notification area.
+        self.tray = None;
         event_loop.exit();
     }
 }
 
+/// `hub --quit`: asks the running Hub (if any) to end. Nothing else starts.
+fn quit_running() -> i32 {
+    let settings = Store::open().dir.join("settings.ini");
+    let request = mdshared_app::sister::Request {
+        unplace: true,
+        from: Some(QUIT_FROM.to_string()),
+        ..Default::default()
+    };
+    // Nobody running is not an error: the wish is already met.
+    mdshared_app::single::forward_request("hub", &settings, &request);
+    0
+}
+
 /// The window (or the picture of `--demo`); the process exit code.
-pub fn run(args: Args, started: Instant) -> i32 {
+pub fn run(mut args: Args, started: Instant) -> i32 {
     let trace = Trace::new(args.trace, started);
     trace.stage("start");
+    if args.quit {
+        return quit_running();
+    }
+    // `--no-tray` wins over `--tray`: with no tray there is nothing to hold a window-less Hub.
+    args.tray &= !args.no_tray;
     let event_loop = match EventLoop::<Event>::with_user_event().build() {
         Ok(l) => l,
         Err(e) => {
@@ -678,9 +897,10 @@ pub fn run(args: Args, started: Instant) -> i32 {
     let proxy = event_loop.create_proxy();
     let post: Arc<dyn Post> = Arc::new(Proxy(Mutex::new(proxy.clone())));
     let mut single = None;
+    let (mut tray_setting, mut notify, mut start_with_windows) = (false, false, false);
     let engine = match &args.demo {
         Some(name) => match demo::build(name, args.view.unwrap_or(View::List)) {
-            Some(vm) => Engine::demo(vm, post),
+            Some(vm) => Engine::demo(vm, post.clone()),
             None => {
                 eprintln!("hub: no demo '{name}'; try: {}", demo::NAMES.join(", "));
                 return 2;
@@ -688,22 +908,32 @@ pub fn run(args: Args, started: Instant) -> i32 {
         },
         None => {
             let store = Store::open();
-            // One Hub per user: a second launch raises the first and ends.
             let settings = store.dir.join("settings.ini");
-            if mdshared_app::single::forward("hub", &settings, &[]) {
+            if args.tray {
+                // Started by the Run key while Hub already runs: nothing to open, nothing to wake.
+                if mdshared_app::single::alive(&settings) {
+                    return 0;
+                }
+            } else if mdshared_app::single::forward("hub", &settings, &[]) {
+                // One Hub per user: a second launch raises (or makes) the first's window and ends.
                 return 0;
             }
             let waker = proxy.clone();
-            single = mdshared_app::single::listen_waking("hub", &settings, move || {
+            single = mdshared_app::single::listen_requests_waking("hub", &settings, move || {
                 let _ = waker.send_event(Event::Raise);
             });
+            (tray_setting, notify, start_with_windows) = (
+                store.tray_enabled(),
+                store.notify_enabled(),
+                store.autostart_enabled(),
+            );
             let first =
                 cli::first_check(&args, std::env::var("HUB_FIRST_CHECK_MS").ok().as_deref());
             let engine = Engine::new(Deps {
                 store,
                 env: glue::system_env(),
                 transport: glue::make_transport(),
-                post,
+                post: post.clone(),
                 shell: Arc::new(RealShell),
                 tmpl: Tmpl::real(),
                 first_check: Some(first),
@@ -713,6 +943,7 @@ pub fn run(args: Args, started: Instant) -> i32 {
         }
     };
     let vm = engine.vm(check::now());
+    let want_tray = tray::wants_tray(args.tray, args.no_tray, tray_setting, args.demo.is_some());
     let mut app = App {
         exit_at: args
             .exit_after_ms
@@ -724,7 +955,7 @@ pub fn run(args: Args, started: Instant) -> i32 {
         window: None,
         surface: None,
         bmp: Bitmap::new(1, 1),
-        gfx: Gfx::new(),
+        gfx: None,
         scale: 1.0,
         layout: Layout::default(),
         vm,
@@ -742,8 +973,29 @@ pub fn run(args: Args, started: Instant) -> i32 {
         exit_now: false,
         closing: None,
         finished: false,
-        _single: single,
+        life: Life {
+            window: true,
+            tray: false,
+        },
+        tray: None,
+        want_tray,
+        post,
+        last_snap: Snapshot::default(),
+        notify,
+        start_with_windows,
+        opens: 0,
+        single,
     };
+    // Under the tray (`--tray`) the icon is the whole program, so it comes first; with a window
+    // first, the icon waits until the window's first frame is out (`about_to_wait`).
+    if app.args.tray {
+        app.want_tray = false;
+        let up = app.start_tray();
+        app.life.window = !up;
+        if !up {
+            eprintln!("hub: no tray icon: opening the window instead");
+        }
+    }
     match event_loop.run_app(&mut app) {
         Ok(()) => 0,
         Err(e) => {
@@ -758,6 +1010,40 @@ mod tests {
     use super::*;
     use winit::dpi::PhysicalSize;
     use winit::window::Theme;
+
+    /// `hub --quit` reaches the running Hub's listener as a request whose sender is `QUIT_FROM`,
+    /// and a plain second launch (no request) does not look like one.
+    #[test]
+    fn a_quit_request_travels_to_the_listener_and_a_plain_launch_is_not_one() {
+        let dir = std::env::temp_dir().join(format!("hub-quit-wire-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let settings = dir.join("settings.ini");
+        let (tx, wake) = std::sync::mpsc::channel();
+        let rx = mdshared_app::single::listen_requests_waking("hub", &settings, move || {
+            let _ = tx.send(());
+        })
+        .expect("listen");
+        // A plain second launch: the listener wakes, no request is queued.
+        assert!(mdshared_app::single::forward("hub", &settings, &[]));
+        wake.recv_timeout(Duration::from_secs(5)).expect("woken");
+        assert!(rx.try_recv().is_err(), "a plain launch carries no request");
+        // The quit request.
+        let request = mdshared_app::sister::Request {
+            unplace: true,
+            from: Some(QUIT_FROM.to_string()),
+            ..Default::default()
+        };
+        assert!(mdshared_app::single::forward_request(
+            "hub", &settings, &request
+        ));
+        wake.recv_timeout(Duration::from_secs(5)).expect("woken");
+        let got = rx
+            .try_recv()
+            .expect("the request arrives before the wake-up");
+        assert_eq!(got.from.as_deref(), Some(QUIT_FROM));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn what_moves_the_rows_or_the_window_closes_the_row_menu() {

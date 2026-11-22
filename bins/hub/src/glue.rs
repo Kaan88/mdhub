@@ -35,8 +35,10 @@ pub enum Event {
     Checked(Vec<(&'static str, Latest)>),
     /// Which installed apps run, looked up on a worker (never on the window's thread).
     Running(Vec<(&'static str, bool)>),
-    /// A second launch asked for this window (the shell raises it).
+    /// A second launch asked for this window (the shell raises it, or makes it).
     Raise,
+    /// The tray icon's menu, its icon or its balloon was used (`tray.rs`). Acted on by the shell.
+    Tray(crate::tray::TrayCmd),
 }
 
 /// Where a worker posts its events (the window's event loop, or a channel in a test).
@@ -811,6 +813,33 @@ impl Engine {
                 .is_file()
     }
 
+    // ---- the tray ----
+
+    /// What the tray's badge, tooltip and menu are built from: the updates waiting and the apps
+    /// installed. `notify` and `start_with_windows` are settings the shell knows, not the engine.
+    pub fn tray_snapshot(
+        &self,
+        now: u64,
+        notify: bool,
+        start_with_windows: bool,
+    ) -> crate::tray::Snapshot {
+        let mut snap = crate::tray::Snapshot {
+            notify,
+            start_with_windows,
+            ..Default::default()
+        };
+        for s in &self.slots {
+            if s.installed.is_some() {
+                snap.apps.push((s.app.id, s.app.name.to_string()));
+            }
+            if row_of(s, now) == Row::Update {
+                snap.updates += 1;
+                snap.update_names.push(s.app.name.to_string());
+            }
+        }
+        snap
+    }
+
     // ---- scheduling ----
 
     /// How long the loop may sleep before the engine wants to run again; None: not on a timer.
@@ -1288,7 +1317,7 @@ impl Engine {
     pub fn handle(&mut self, ev: Event) -> bool {
         let now = check::now();
         match ev {
-            Event::Raise => false,
+            Event::Raise | Event::Tray(_) => false,
             Event::Progress { id, p } => {
                 let phase = match p {
                     Progress::Downloading { done, total, .. } => Phase::Downloading {

@@ -1,5 +1,6 @@
 //! The command line of the window: `hub [--behind] [--no-session] [--exit-after-ms N] [--trace]
-//! [--demo NAME] [--check-now] [--size WxH] [--light|--dark] [--view list|large|small]`.
+//! [--demo NAME] [--check-now] [--size WxH] [--light|--dark] [--view list|large|small]
+//! [--tray] [--no-tray] [--quit] [--tray-test-balloon TEXT]`.
 //! (`--shot` is a different program: `shot.rs`.)
 use crate::vm::View;
 
@@ -17,6 +18,16 @@ pub struct Args {
     pub size: Option<(u32, u32)>,
     pub dark: Option<bool>,
     pub view: Option<View>,
+    /// Start with no window, under the tray icon (the Run key's `--tray`). Wins over the
+    /// `tray` setting, loses to `--no-tray`.
+    pub tray: bool,
+    /// No tray icon at all: the window opens first and closing it quits (tests, and people who
+    /// do not want one).
+    pub no_tray: bool,
+    /// Ask the running Hub to quit, then end (no window, no engine).
+    pub quit: bool,
+    /// A test run: a balloon with this text a moment after the icon is up.
+    pub tray_test_balloon: Option<String>,
 }
 
 pub fn parse(args: &[String]) -> Result<Args, String> {
@@ -28,6 +39,13 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "--no-session" => a.no_session = true,
             "--trace" => a.trace = true,
             "--check-now" => a.check_now = true,
+            "--tray" => a.tray = true,
+            "--no-tray" => a.no_tray = true,
+            "--quit" => a.quit = true,
+            "--tray-test-balloon" => {
+                a.tray_test_balloon =
+                    Some(it.next().ok_or("--tray-test-balloon needs a text")?.clone())
+            }
             "--light" => a.dark = Some(false),
             "--dark" => a.dark = Some(true),
             "--exit-after-ms" => {
