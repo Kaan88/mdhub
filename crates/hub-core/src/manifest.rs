@@ -116,11 +116,25 @@ fn short(s: &str) -> String {
         .collect()
 }
 
-/// A plain file name: letters, digits, `.`, `_`, `-`; not hidden; at most 128 bytes.
+/// A Windows device name (`NUL`, `con.txt`, `COM1`): Win32 maps these to a device whatever the
+/// extension, so a file cannot be written under one.
+fn reserved_device(v: &str) -> bool {
+    let stem = v.split('.').next().unwrap_or("").to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ["COM", "LPT"].iter().any(|p| {
+            stem.strip_prefix(p)
+                .is_some_and(|d| d.len() == 1 && d.bytes().all(|b| b.is_ascii_digit()))
+        })
+}
+
+/// A plain file name: letters, digits, `.`, `_`, `-`; not hidden; no trailing `.` (Win32 strips
+/// it, so the file written would not be the one named); not a device name; at most 128 bytes.
 fn valid_name(v: &str) -> bool {
     !v.is_empty()
         && v.len() <= MAX_NAME
         && !v.starts_with('.')
+        && !v.ends_with('.')
+        && !reserved_device(v)
         && v.bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
@@ -305,13 +319,14 @@ fn finish(platform: &str, d: Draft) -> Result<Option<PlatformEntry>, String> {
     } else {
         None
     };
+    // Windows file names are case-insensitive: `MDVIEW.EXE` is `mdview.exe`.
     let mut names = HashSet::new();
     let all = files
         .iter()
         .chain(zip.iter())
         .chain(setup.iter().map(|s| &s.file));
     for f in all {
-        if !names.insert(f.name.as_str()) {
+        if !names.insert(f.name.to_ascii_lowercase()) {
             return Err(format!(
                 "{platform}: file name `{}` is used twice",
                 short(&f.name)
@@ -456,8 +471,10 @@ fn url_file(url: &str) -> Option<String> {
 }
 
 /// Read mdedit's or mdview's format-1/2 manifest as a `Kind::Files` windows entry: the exe, the
-/// engine and any further executables as files of unknown size (0), `exe` = `app.exe`. The URLs
-/// must lie under the app's own releases, as in a `hub.txt`.
+/// engine and any further executables as files of unknown size (0), `exe` = `app.exe`. The
+/// primary file is installed as `app.exe` whatever the release asset is called (the release
+/// scripts name it with the version and platform). The URLs must lie under the app's own
+/// releases, as in a `hub.txt`.
 pub fn from_legacy(bytes: &[u8], app: &CatalogApp) -> Result<HubManifest, String> {
     let m = UpdateManifest::parse(bytes).map_err(|e| e.to_string())?;
     let a = m
@@ -478,8 +495,11 @@ pub fn from_legacy(bytes: &[u8], app: &CatalogApp) -> Result<HubManifest, String
         });
         Ok(())
     };
+    // The asset name must be a plain one, but the file is placed under the exe's name.
     add(
-        valid_name(&a.name).then(|| a.name.clone()),
+        valid_name(&a.name)
+            .then(|| app.exe.to_string())
+            .filter(|n| valid_name(n)),
         &a.url,
         &a.sha256,
     )?;
@@ -1025,6 +1045,69 @@ mod tests {
             ("userinfo in url", u("/v1/a@b.exe"), "malformed URL"),
             ("query in url", u("/v1/a.exe?x=1"), "malformed URL"),
             ("space in url", u("/v1/a b.exe"), "malformed URL"),
+            ("percent in url", u("/v1/a%2e.exe"), "malformed URL"),
+            ("fragment in url", u("/v1/a.exe#x"), "malformed URL"),
+            ("backslash in url", u("/v1/a\\b.exe"), "malformed URL"),
+            (
+                "url ends in a slash",
+                u("/v1/"),
+                "outside the app's own releases",
+            ),
+            (
+                "device name NUL as file",
+                set(&m, &f, "NUL"),
+                "not a plain file name",
+            ),
+            (
+                "device name with extension",
+                set(&m, &f, "aux.exe"),
+                "not a plain file name",
+            ),
+            (
+                "device name in lower case",
+                set(&m, &f, "con"),
+                "not a plain file name",
+            ),
+            (
+                "device name COM1",
+                set(&m, &f, "Com1.txt"),
+                "not a plain file name",
+            ),
+            (
+                "device name LPT9",
+                set(&m, &f, "lpt9"),
+                "not a plain file name",
+            ),
+            (
+                "trailing dot in file",
+                set(&m, &f, "mdedit.exe."),
+                "not a plain file name",
+            ),
+            (
+                "device name as exe",
+                set(&m, &format!("{W}.exe"), "NUL"),
+                "plain relative path",
+            ),
+            (
+                "device name inside exe path",
+                set(&m, &format!("{W}.exe"), "bin\\con.exe"),
+                "plain relative path",
+            ),
+            (
+                "trailing dot in exe",
+                set(&m, &format!("{W}.exe"), "mdedit.exe."),
+                "plain relative path",
+            ),
+            (
+                "device name in wait",
+                set(&m, &format!("{W}.wait"), "mdedit-ai.exe, nul"),
+                "plain relative paths",
+            ),
+            (
+                "trailing dot in wait",
+                set(&m, &format!("{W}.wait"), "mdedit-ai.exe."),
+                "plain relative paths",
+            ),
             (
                 "url too long",
                 u(&format!("/v1/{}", "a".repeat(600))),
@@ -1350,6 +1433,134 @@ mod tests {
     }
 
     #[test]
+    fn device_names_need_the_whole_stem() {
+        // Only the stem before the first dot is a device name: these are ordinary files.
+        let m = mdview_txt();
+        let f = format!("{W}.file2");
+        for name in [
+            "console.exe",
+            "com10.exe",
+            "auxiliary.exe",
+            "nul-x.exe",
+            "com.exe",
+        ] {
+            ok("mdview", &set(&m, &f, name));
+        }
+    }
+
+    #[test]
+    fn a_file_name_is_unique_whatever_its_case() {
+        let m = mdview_txt();
+        let f2 = format!("{W}.file2");
+        let e = err("mdview", set(&m, &f2, "MDVIEW.EXE").as_bytes());
+        assert!(e.contains("used twice"), "{e}");
+        // The setup file is a file of the same folder as well.
+        let e = err("mdview", set(&m, &f2, "Mdview-Setup-0.9.1.exe").as_bytes());
+        assert!(e.contains("used twice"), "{e}");
+        ok("mdview", &set(&m, &f2, "other.exe"));
+    }
+
+    #[test]
+    fn a_stray_piece_of_a_setup_or_zip_is_refused() {
+        let a = app("mdview");
+        let base = format!(
+            "hub: 1\napp: mdview\nversion: 1.0.0\n{W}.kind: files\n{W}.exe: mdview.exe\n{}",
+            fl(a, &format!("{W}.file"), "v1", "mdview.exe", 1)
+        );
+        ok("mdview", &base);
+        let rows = [
+            ("silent alone", format!("{W}.setup.silent: /S\n"), "setup"),
+            ("scope alone", format!("{W}.setup.scope: user\n"), "setup"),
+            (
+                "silent and scope, no file",
+                format!("{W}.setup.silent: /S\n{W}.setup.scope: user\n"),
+                "setup",
+            ),
+            (
+                "setup file without silent",
+                format!(
+                    "{}{W}.setup.scope: user\n",
+                    fl(a, &format!("{W}.setup"), "v1", "s.exe", 1)
+                ),
+                "setup needs .silent and .scope",
+            ),
+            ("zip name alone", format!("{W}.zip: a.zip\n"), "zip"),
+            (
+                "zip url alone",
+                format!("{W}.zip.url: {}\n", url(a, "v1", "a.zip")),
+                "zip",
+            ),
+            (
+                "zip sha alone",
+                format!("{W}.zip.sha256: {}\n", h("z")),
+                "zip",
+            ),
+        ];
+        for (label, extra, want) in rows {
+            let e = err("mdview", format!("{base}{extra}").as_bytes());
+            assert!(e.contains(want), "{label}: {e}");
+        }
+        // The complete zip is accepted beside files.
+        let zip = fl(a, &format!("{W}.zip"), "v1", "a.zip", 1);
+        ok("mdview", &format!("{base}{zip}"));
+    }
+
+    #[test]
+    fn the_limits_are_exact() {
+        let m = mdview_txt();
+        let f = format!("{W}.file2");
+        let exe = format!("{W}.exe");
+        let un = format!("{W}.uninstall");
+        let silent = format!("{W}.setup.silent");
+        let good = |t: String| {
+            ok("mdview", &t);
+        };
+        let bad = |t: String, want: &str| {
+            let e = err("mdview", t.as_bytes());
+            assert!(e.contains(want), "wanted `{want}`, got `{e}`");
+        };
+        // A file name: 128 bytes, no more.
+        let name = |n: usize| format!("{}.exe", "a".repeat(n - 4));
+        good(set(&m, &f, &name(MAX_NAME)));
+        bad(set(&m, &f, &name(MAX_NAME + 1)), "plain file name");
+        // A relative path: 128 bytes, no more.
+        let path = |n: usize| format!("{}\\{}", "a".repeat(64), "b".repeat(n - 65));
+        good(set(&m, &exe, &path(MAX_PATH)));
+        bad(set(&m, &exe, &path(MAX_PATH + 1)), "plain relative path");
+        // The uninstall key: 80 bytes, a small alphabet.
+        good(set(&m, &un, &"u".repeat(80)));
+        bad(set(&m, &un, &"u".repeat(81)), "uninstall key");
+        good(set(&m, &un, "{A-b_1.2}"));
+        for c in [" ", "/", "\\", ";", "\""] {
+            bad(set(&m, &un, &format!("a{c}b")), "uninstall key");
+        }
+        // The silent arguments: not empty, 200 bytes, a small alphabet.
+        good(set(&m, &silent, &"s".repeat(MAX_SILENT)));
+        bad(set(&m, &silent, &"s".repeat(MAX_SILENT + 1)), "not allowed");
+        bad(set(&m, &silent, ""), "not allowed");
+        bad(set(&m, &silent, "/S & calc"), "not allowed");
+        bad(set(&m, &silent, "/S;calc"), "not allowed");
+        // A size: up to 8 GiB.
+        let size = format!("{W}.file.size");
+        good(set(&m, &size, &MAX_SIZE.to_string()));
+        bad(set(&m, &size, &(MAX_SIZE + 1).to_string()), "too large");
+        // A date: ten characters, a real month, a day from 1 to 31.
+        good(set(&m, "date", "2026-12-31"));
+        good(set(&m, "date", "2026-01-01"));
+        for d in [
+            "2026-11-200",
+            "2026-11-99",
+            "2026-11-32",
+            "2026-11-00",
+            "2026-00-10",
+            "2026-11-1",
+            "x2026-11-10",
+        ] {
+            bad(set(&m, "date", d), "YYYY-MM-DD");
+        }
+    }
+
+    #[test]
     fn no_platform_at_all() {
         let t = "hub: 1\napp: sprawl\nversion: 1.0.0\n";
         assert!(err("sprawl", t.as_bytes()).contains("no platform"));
@@ -1542,6 +1753,58 @@ mod tests {
             .collect();
         let m = legacy("mdview", &t).unwrap();
         assert_eq!(m.entry().unwrap().files.len(), 1);
+    }
+
+    #[test]
+    fn legacy_places_the_primary_file_under_the_exe_name() {
+        // The release scripts name the asset with the version and the platform.
+        let t = legacy_mdedit().replace(
+            "windows-x86_64.asset: mdedit.exe",
+            "windows-x86_64.asset: mdedit-0.30.0-windows-x86_64.exe",
+        );
+        let m = legacy("mdedit", &t).unwrap();
+        let e = m.entry().unwrap();
+        assert_eq!(e.exe.as_deref(), Some("mdedit.exe"));
+        assert_eq!(e.files[0].name, "mdedit.exe");
+    }
+
+    #[test]
+    fn legacy_name_checks() {
+        let b = "https://github.com/Kaan88/markdown-editor-rs/releases/download/v0.30.0";
+        let extra = |url: &str| {
+            format!(
+                "{}windows-x86_64.tool.url: {url}
+windows-x86_64.tool.sha256: {}
+",
+                legacy_mdedit(),
+                h("t")
+            )
+        };
+        // A file name used twice: an extra that has the engine's name.
+        let e = legacy("mdedit", &extra(&format!("{b}/mdview-engine.exe"))).unwrap_err();
+        assert!(e.contains("used twice"), "{e}");
+        // ... or one that has the exe's name, whatever the asset is called.
+        let e = legacy("mdedit", &extra(&format!("{b}/mdedit.exe"))).unwrap_err();
+        assert!(e.contains("used twice"), "{e}");
+        // An asset name that is not a plain one.
+        for bad in ["a b.exe", ".hidden", "nul", "x.exe."] {
+            let t = legacy_mdedit().replace(
+                "windows-x86_64.asset: mdedit.exe",
+                &format!("windows-x86_64.asset: {bad}"),
+            );
+            assert!(legacy("mdedit", &t).is_err(), "{bad}");
+        }
+        // An extra whose URL does not end in a plain name is called `<stem>.exe`.
+        let m = legacy("mdedit", &extra(&format!("{b}/.tool"))).unwrap();
+        let names: Vec<_> = m
+            .entry()
+            .unwrap()
+            .files
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        assert!(names.contains(&"tool.exe"), "{names:?}");
+        assert_eq!(names.len(), 4);
     }
 
     #[test]
