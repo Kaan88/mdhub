@@ -52,4 +52,4 @@ after `ci` is green on `main`, not a local script. A version that failed is not 
   UAC prompt for a machine-scope setup, an app that is open, Explorer restarting under the tray
   icon, a real self-update from a published release. Nothing counts as working on Windows until
   it has run on Windows.
-- The four apps' own changes (`docs/APP-CHANGES.md`) are releases of those apps, separately.
+- The apps' own changes (`docs/APP-CHANGES.md`) are releases of those apps, separately.

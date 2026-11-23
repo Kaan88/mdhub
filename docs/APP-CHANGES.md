@@ -333,6 +333,16 @@ barbican`), and the exe a version resource. **Standing down**: Barbican's own up
 stand down for Hub yet; that is not built on either side (`docs/COMPLIANCE.md` section 6), so
 until it is, Hub and Barbican's updater could both offer the same update.
 
+## Purge (`Kaan88/purge`)
+
+Added to the catalog afterwards (D-030); read from its v0.1.0 release. **Nothing to change**: its
+v0.1.0 (alpha, 2026-11-23) already carries `hub.txt` written with `tools/write-hub-txt.ps1`, its
+setup is Inno for all users (`{autopf}\Purge`, `PrivilegesRequired=admin`, so each update goes
+through Windows' prompt), and its `CloseApplications` closes the tray app and its windowless
+helpers, which is why the entry has `setup_closes_app` (D-029). It must keep writing `hub.txt` with
+the same exe, uninstall key and `wait` list the catalog entry names, or the catalog follows the new
+release.
+
 ## Days
 
 | Where | Days |
@@ -343,6 +353,8 @@ until it is, Hub and Barbican's updater could both offer the same update.
 | mdview | 0.75 |
 | Sprawl | 0.75 |
 | Inbound | 1.5 |
+| Purge (D-030) | 0: its v0.1.0 release already carries `hub.txt` |
+| Barbican (D-031) | 0 here: its installer work is in its own repository, unreleased |
 
 Order: the script, then mdedit and mdview with the shared pieces (the first slice), then Sprawl and
 Inbound; none of them has to wait for Hub's window.

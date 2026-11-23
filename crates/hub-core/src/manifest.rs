@@ -822,7 +822,7 @@ mod tests {
         parse(text, app(id)).expect_err("should be refused")
     }
 
-    // ---------------------------------------------------------------- the four apps
+    // ---------------------------------------------------------------- the apps
 
     #[test]
     fn mdedit_files_with_both_engines() {
