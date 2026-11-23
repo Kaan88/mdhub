@@ -3,7 +3,7 @@
 How each part is built, one section per part, written from reading the code. First screen:
 
 ```
-                      catalog (4 apps, compiled in)
+                      catalog (5 apps, compiled in)
                          |
  transport ----> check ----> manifest (hub.txt)         state (Hub's own files)
    (bytes)    what is new?    parse / from_legacy        installed.ini, settings.ini,
@@ -22,10 +22,10 @@ window draws a `Vm` and returns what a pointer can hit; `glue.rs` is the only pl
 them, so every behaviour is tested without a window.
 
 ## catalog.rs
-Four `CatalogApp` constants: id, name, blurb, repository under `Kaan88`, exe (relative; Inbound's
+Five `CatalogApp` constants (mdedit, mdview, Sprawl, Inbound, Purge): id, name, blurb, repository under `Kaan88`, exe (relative; Inbound's
 is `app\DownloadManager.Host.exe`), launch args (`--open` for Inbound), folder under
-`%LOCALAPPDATA%\Programs`, machine folder (Sprawl), Inno uninstall keys, `wait` (executables that
-must be gone before an install), the legacy manifest file name (mdedit, mdview), tile colour and
+`%LOCALAPPDATA%\Programs`, machine folder (Sprawl, Purge), Inno uninstall keys, `wait` (executables that
+must be gone before an install), `setup_closes_app` (Sprawl, Inbound, Purge; D-029), the legacy manifest file name (mdedit, mdview), tile colour and
 glyph. `latest_url(file)` and `url_allowed(url)` (a manifest may name only
 `https://github.com/Kaan88/<repo>/releases/download/...`). Adding an app is an entry and a
 release of Hub.

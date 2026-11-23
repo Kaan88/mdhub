@@ -13,8 +13,8 @@ tray, the balloon and the tray menu seen live. 0.1.1 could not update Inbound or
 
 ## On `main`, committed
 
-- `crates/hub-core`: catalog (four apps), model, `hub.txt` parser and writer plus the legacy
-  stopgap, Hub's own files (`state.rs`), detection, checking, transport, installing, and the tray
+- `crates/hub-core`: catalog (five apps, D-030), model, `hub.txt` parser and writer plus the
+  legacy stopgap, Hub's own files, detection, checking, transport, installing, and the tray
   work: `autostart` (Run key), `selfupdate` (Hub's own update), `notify` (balloon text and memory).
 - `bins/hub`: the window (`app`, winit + softbuffer, created on demand), its engine (`glue`),
   workers (`work`), `cli`, drawing (`vm view grid panes ui`), `--shot` and `demo`, and the tray
@@ -32,8 +32,8 @@ tray, the balloon and the tray menu seen live. 0.1.1 could not update Inbound or
   in `icon.rs`; `assets/hub.ico` is packed from it by `tools/make-icon.ps1`.
 - The apps' own icons (D-027): list, large and small views draw each app's own icon, one 128 px
   PNG in `assets/apps/<id>.png` (mdedit, mdview from their .ico's 128 frame; Sprawl, Inbound
-  from their 256 px PNG, downscaled), decoded on the first draw, scaled once per size. The
-  catalog `tile`/`glyph` draw only when an icon does not decode.
+  from their 256 px PNG, Purge from its .ico's 256 frame, downscaled), decoded on the first
+  draw, scaled once per size. The catalog `tile`/`glyph` draw only when an icon does not decode.
 - Closing an app (D-025, D-026): the offer bar's yes covers one install; a roll back of an open
   app is not started; a question with no window opens the window.
 - Settings card: start with Windows, tray, notifications, check interval, update Hub.
@@ -123,12 +123,12 @@ tray, the balloon and the tray menu seen live. 0.1.1 could not update Inbound or
   same version" (the record's exe is found first). Not seen; read from the code.
 - Inbound's `latest` is fragile (`android-v0.0.9` newer than `v0.9.0`); see `docs/APP-CHANGES.md`.
 - Until each app's next release carries `hub.txt`, Sprawl and Inbound show "no release
-  information"; mdedit and mdview are read through the stopgap (D-003).
+  information"; mdedit and mdview use the stopgap (D-003); Purge 0.1.0 has `hub.txt` (D-030).
 - The catalog's `wait` list for Inbound lacks `DownloadManager.Server.exe` and
   `inbound-torrent.exe`.
 - A download is a memory spike of the file's size during an install (68.7 MiB for Inbound): the
   30 MiB budget holds at rest only.
-- Samples have CRLF in a Windows checkout; no `.gitattributes`.
+- Samples have CRLF in a Windows checkout, no `.gitattributes`; `tests/samples.rs` parses them.
 
 ## Reviewed, and by whom
 

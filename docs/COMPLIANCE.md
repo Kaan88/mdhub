@@ -1,7 +1,7 @@
 # What an app must do to work with Hub
 
 **Read this first if you are an agent (or a person) working in another repository** (mdedit, mdview,
-Sprawl, Inbound, or a later app) and the task says "for Hub", "hub.txt", "make it work with the
+Sprawl, Inbound, Purge, or a later app) and the task says "for Hub", "hub.txt", "make it work with the
 launcher". This is the contract. It is kept true: if the code in `crates/hub-core` disagrees with
 this file, the code is right and this file is a bug, so say so in your pull request.
 
@@ -68,12 +68,13 @@ windows-x86_64.setup.silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 windows-x86_64.setup.scope: machine
 ```
 
-Real examples of all four apps: `tools/samples/<app>/hub.txt`.
+Examples for every catalog app: `tools/samples/<app>/hub.txt` (Purge's is its v0.1.0 release's own
+`hub.txt`). `crates/hub-core/tests/samples.rs` checks that each parses.
 
 | Key | Rule |
 |---|---|
 | `hub: 1` | First meaningful line. Any other number is refused. |
-| `app` | The catalog id (`mdedit`, `mdview`, `sprawl`, `inbound`). Must match. |
+| `app` | The catalog id (`mdedit`, `mdview`, `sprawl`, `inbound`, `purge`). Must match. |
 | `version` | `X.Y.Z` or `X.Y.Z-pre`. Hub compares versions SemVer-style. |
 | `date` | `YYYY-MM-DD`, the release day. |
 | `notes` | One line, at most 1024 **bytes**, no control characters. |
@@ -134,7 +135,7 @@ a retry). Then Hub looks for the install again and records it.
 
 - **Per user is preferred** (`PrivilegesRequired=lowest`, `%LOCALAPPDATA%\Programs\<name>`); that is
   `scope: user`, and Hub needs no administrator rights.
-- **`scope: machine`** (Sprawl, in `Program Files`): Hub starts the installer elevated, so Windows
+- **`scope: machine`** (Sprawl and Purge, in `Program Files`): Hub starts the installer elevated, so Windows
   shows its consent prompt on every update. Hub itself is never elevated.
 - **The app must not be a blocker.** Hub asks the app's visible windows to close (`WM_CLOSE`),
   waits a few seconds, and never ends a process. An app with **no window** (tray or background

@@ -1,5 +1,5 @@
 //! The apps Hub knows: compiled in. Adding one is a new entry and a release of Hub.
-//! Scope of this slice, by the owner: mdedit, mdview, Sprawl, Inbound.
+//! Scope, by the owner: mdedit, mdview, Sprawl, Inbound, Purge.
 
 pub struct CatalogApp {
     /// Lower-case id; the `app:` of its hub.txt.
@@ -33,7 +33,7 @@ pub struct CatalogApp {
     pub glyph: &'static str,
 }
 
-pub const CATALOG: [CatalogApp; 4] = [
+pub const CATALOG: [CatalogApp; 5] = [
     CatalogApp {
         id: "mdedit",
         name: "mdedit",
@@ -103,6 +103,24 @@ pub const CATALOG: [CatalogApp; 4] = [
         tile: [0x1d, 0x8a, 0x9e],
         glyph: "download",
     },
+    CatalogApp {
+        id: "purge",
+        name: "Purge",
+        blurb: "Uninstalls programs and the leftovers they leave behind",
+        repo: "purge",
+        exe: "Purge.exe",
+        launch_args: &[],
+        folder: "Purge",
+        machine_folder: Some("Purge"),
+        uninstall_keys: &["{7C1B9E64-2D58-4F1A-9B03-6E4C5A8D7F21}_is1"],
+        // The engine is a windowless child of the window; the broker is an elevated helper with
+        // no window. Neither can be asked to close, so the setup closes them (D-029, D-030).
+        wait: &["purge-engine.exe", "purge-broker.exe"],
+        setup_closes_app: true,
+        legacy_manifest: None,
+        tile: [0x25, 0x63, 0xeb],
+        glyph: "delete",
+    },
 ];
 
 pub fn find(id: &str) -> Option<&'static CatalogApp> {
@@ -137,7 +155,7 @@ mod tests {
             .filter(|a| a.setup_closes_app)
             .map(|a| a.id)
             .collect();
-        assert_eq!(flagged, ["sprawl", "inbound"]);
+        assert_eq!(flagged, ["sprawl", "inbound", "purge"]);
     }
 
     #[test]
@@ -151,5 +169,19 @@ mod tests {
         ] {
             assert!(inbound.wait.contains(&exe), "{exe}");
         }
+    }
+
+    #[test]
+    fn purges_wait_list_has_its_windowless_helpers_and_its_key_is_the_inno_app_id() {
+        let purge = find("purge").unwrap();
+        assert_eq!(purge.exe, "Purge.exe");
+        for exe in ["purge-engine.exe", "purge-broker.exe"] {
+            assert!(purge.wait.contains(&exe), "{exe}");
+        }
+        assert_eq!(
+            purge.uninstall_keys,
+            ["{7C1B9E64-2D58-4F1A-9B03-6E4C5A8D7F21}_is1"]
+        );
+        assert_eq!(purge.machine_folder, Some("Purge"));
     }
 }

@@ -223,3 +223,19 @@ process. Inbound's `DownloadManager.Server.exe` joins its wait list. Roll back s
 (D-026): it has no installer.
 Would change: a setup that kills without asking (then the flag goes); an app that gains a quit
 request Hub can send (then ask it instead).
+
+## D-030 Purge joins the catalog, installed for all users like Sprawl
+The owner asked for Purge (`Kaan88/purge`, an uninstaller that also removes what a program leaves
+behind) in Hub's catalog. It is installed like Sprawl: Inno, `PrivilegesRequired=admin`,
+`{autopf}\Purge`, so `folder` and `machine_folder` are both `Purge` and an install or update runs
+through Windows' prompt (`scope: machine`). Uninstall key `{7C1B9E64-2D58-4F1A-9B03-6E4C5A8D7F21}_is1`
+(its Inno `AppId`), exe `Purge.exe`, `wait` `purge-engine.exe` (a windowless child) and
+`purge-broker.exe` (an elevated helper with no window). Neither helper can be asked to close and
+Purge's setup has `CloseApplications=yes`, so `setup_closes_app` is set (D-029). No legacy
+manifest. Its icon is the 256 px frame of its `.ico` downscaled to 128 px (D-027); the fallback
+tile is the icon's blue with the `delete` glyph. Its first release, v0.1.0 (alpha, 2026-11-23,
+`releases/latest`, not a pre-release), already carries `hub.txt` written with Hub's
+`tools/write-hub-txt.ps1`, and `Purge.exe` has `FILEVERSION` 0.1.0.0; `tools/samples/purge/hub.txt`
+is that file. So once a Hub release carries this entry, Hub can install, detect and update Purge.
+Would change: Purge's release workflow writing a different exe, key or wait list than the sample
+(then the catalog follows the release); the owner taking Purge out.

@@ -110,6 +110,11 @@ fn app(id: &str, row: Row, installed: Option<&str>, latest: Option<&str>, runnin
             "20 Nov",
             "Faster scans of large drives, and a cleaner list of what is safe to remove.",
         ),
+        "purge" => (
+            "43.7 MB",
+            "23 Nov",
+            "Uninstalls programs and the leftovers they leave behind.",
+        ),
         _ => (
             "68.7 MB",
             "17 Nov",

@@ -399,6 +399,26 @@ mod tests {
     }
 
     #[test]
+    fn an_app_with_no_hub_txt_released_is_no_release_information_and_not_a_failed_check() {
+        // A repository with no release yet (or a release without hub.txt): github.com answers 404
+        // for releases/latest/download/hub.txt. One request, the row's reason, no retry storm.
+        let purge = find("purge").unwrap();
+        let t = Fake::default();
+        assert_eq!(
+            check_one(purge, &t),
+            Latest::NoManifest("no hub.txt in the latest release".to_string())
+        );
+        assert_eq!(t.asked(), vec![purge.latest_url("hub.txt")]);
+        let store = Store {
+            dir: scratch("no-release"),
+        };
+        let out = check_all([purge], &t, &store);
+        assert!(matches!(out[0].1, Latest::NoManifest(_)));
+        assert_eq!(store.failures(), 0);
+        assert!(store.cached_manifest("purge").is_none());
+    }
+
+    #[test]
     fn a_manifest_for_another_app_or_garbage_is_no_manifest_with_a_reason() {
         let t = Fake::default();
         let a = sprawl();
@@ -423,10 +443,11 @@ mod tests {
             t.set(a.latest_url("hub.txt"), Ok(hub_txt(a, "2.0.0")));
         }
         let out = check_all(&crate::catalog::CATALOG, &t, &store);
-        assert_eq!(out.len(), 4);
+        let n = crate::catalog::CATALOG.len();
+        assert_eq!(out.len(), n);
         assert_eq!(out[0].0, "mdedit");
         assert!(out.iter().all(|(_, l)| matches!(l, Latest::Found(_))));
-        assert_eq!(t.count(), 4);
+        assert_eq!(t.count(), n);
         assert_eq!(store.failures(), 0);
         assert!(store.last_check().unwrap() > 0);
         assert!(store.cached_manifest("sprawl").is_some());
