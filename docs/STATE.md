@@ -34,7 +34,17 @@ only. Whether `ci` has run there was not looked at. The owner has not asked for 
 - Closing an app (D-025, D-026): the offer bar's yes covers one install; a roll back of an open
   app is not started; a question with no window opens the window.
 - Settings card: start with Windows, tray, notifications, check interval, update Hub.
-- Verified 2026-11-22 on this PC: `cargo fmt --all --check` clean; `cargo clippy --workspace
+- The release notes view (D-028), written after the review below: a page for the selected app's
+  latest version with `mdedit 1.2.0 -> 1.2.1` and its date under the text; from the row menu,
+  the pane's "Release notes" link and the key `n`; Esc, Backspace or the arrow go back. The
+  one-line `notes` shows at once; `notes.file` is one GET (64 KiB, 10 s) only when the view is
+  opened, kept on disk by app and version; loading, loaded, failed (reason, Try again) and no
+  file are drawn. A Markdown subset reader of Hub's own over the shared painter, no new
+  dependency. Tests: 17 for the reader and page, 13 end to end, 4 for the url, cleaning and the
+  cache; 5 new shots (list view only), looked at in both themes at both sizes.
+- Verified 2026-11-23 on this PC with the notes view: fmt, clippy (both feature sets) clean; tests
+  159 (hub, 1 ignored) + 188 (hub-core, 1 ignored), same with test-hooks; shots 176 PNGs, check
+  clean, two runs byte-identical. Before it, verified 2026-11-22: `cargo fmt --all --check` clean; `cargo clippy --workspace
   --all-targets -D warnings` clean with and without `--features hub/test-hooks`; `cargo test
   --workspace` 129 (hub, 1 ignored: the icon generator) + 183 (hub-core, 1 ignored), same with
   test-hooks; no `HKCU\Software\HubTest` left behind. Shots: 156 PNGs, check clean.
@@ -55,6 +65,12 @@ only. Whether `ci` has run there was not looked at. The owner has not asked for 
   The first frame was measured with `--demo main` (no engine work on the path). A real
   window-first start without `--demo` was not timed here (it needs a test-hooks build and a fake
   github root); the integrator's 212 to 244 ms for it is not reproduced and not explained here.
+  After the notes view (2026-11-23, 7 runs, `--demo main`): first frame 57.9 to 66.3 ms (median
+  59.5), private memory 9.5 to 9.6 MiB, CPU time flat from the first frame to exit (no CPU at
+  idle), exe 3,638,272 bytes. A 64 KiB notes file lays out in 31 ms once, a scroll frame draws in
+  0.16 ms from the kept layout (`a_64_kib_file_lays_out_once_and_scrolls_cheaply`). The view is
+  not on the launch path: nothing of it runs until it is opened. Not measured: the view open in a
+  real window (memory with the fonts' layouts of a long text), a real network fetch.
   The times and memory were NOT measured again after the icon and the review fixes: the icon is
   drawn once per change of the count, never per frame, and the fixes add nothing to the launch
   path, but that is reasoning, not a measurement.
@@ -67,13 +83,17 @@ only. Whether `ci` has run there was not looked at. The owner has not asked for 
   stops, the window opens and closes 20 times by message here, and the card is checked by tests
   and shots only. Routing of mouse, keyboard and wheel into the card (`app.rs`) is compiled and
   read, not exercised.
+- The notes view in a real window: the page's wiring in `app.rs` (wheel, keys, the scroll kept per
+  page) is compiled and read, not run; the scrollbar thumb is drawn but cannot be dragged; the
+  links in the notes are not clickable; the mock picture of the owner was not available to look
+  at (its file was not found), the page follows the description "1.2.1 above the installed 1.2.0".
 - The window made because the offer bar asks (D-025): its wiring in `app.rs` has no test (it
   needs a window); the rule and the engine's side have.
 - A use for the manifest's `.min`, `.uninstall` and `.updates`: they are parsed and ignored.
 - "Swap at next start" for a downloaded Hub: it is swapped at "Restart now" or at quit, else
   deleted by `clean_up` at the next start and fetched again.
 - Streaming downloads with resume, free-space check (D-005): downloads are whole bodies in memory.
-- Zip installs (refused), uninstalling from Hub, roll back of setup installs, notes on demand,
+- Zip installs (refused), uninstalling from Hub, roll back of setup installs,
   skipping a version in the window, the pre-release channel.
 - The `close` request for mdedit and mdview, the `managed-by` stand-down (D-007), and every app
   change in `docs/APP-CHANGES.md`: proposals, applied to nothing.

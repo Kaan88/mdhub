@@ -181,3 +181,26 @@ launch path. The copies are a snapshot: an app that changes its icon needs the f
 Hub release (no fetching of icons: Hub talks to GitHub releases only). Inbound's icon is line art
 on a transparent ground, so on the dark theme its navy outline is faint. Replaces the generic tiles of the first slice (no earlier decision named them).
 Would change: a request for icons that follow the apps' releases.
+
+## D-028 The release notes view: one GET of `notes.file` when opened, cached by version, drawn with the shared painter
+The owner asked for a changelog view that "could utilize the shared crate". It shows the notes of
+the version Hub knows about (the latest of `hub.txt`) with the line `mdedit 1.2.0 -> 1.2.1` and
+its date under them. Reached from the row menu ("Release notes"), the pane's "Release notes"
+link, and the key `n`; Esc, Backspace or the back arrow return, the selection kept. It is a
+page that takes the content area (title row, offer bar and status bar stay), not the pane grown,
+because the notes are long and the pane is a strip under the list. Source: `hub.txt` `notes`
+(always there, shown at once) and, when the manifest has `notes.file`, one GET of
+`https://github.com/Kaan88/<repo>/releases/download/v<version>/<file>` through the same
+`Transport` (64 KiB, 10 s, the catalog's `url_allowed`, a plain file name), started only when the
+view is opened and the disk has no copy: never at start, at idle or in a check. The answer is kept
+in `<data>
+otes\<id>-<version>.md` (one file per app, an older version's removed), so opening
+again, also after a restart, is offline. States: loading, loaded, failed (the reason, "Try again",
+the one line stays), no notes file (the one line, and it says so). Rendering is Hub's own subset
+reader in `bins/hub/src/changelog.rs` over `mdshared-ui` (`Painter`, `scroll`): no renderer crate,
+no new dependency (D-006 holds). Everything fetched is hostile: lossy UTF-8, control and bidi
+characters removed, an iterative parser with caps on lines, blocks, depth and length. No italic face
+exists in the shared fonts, so italic is a softer colour; links are shown as text and are not
+clickable (a "Release page" button opens the release on github.com/Kaan88 instead).
+Would change: a markdown crate if the notes grow tables and images; a notes file fetched ahead of
+time if the owner wants them offline for versions never opened; clickable links.

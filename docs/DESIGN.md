@@ -141,6 +141,37 @@ there is no window, `app.rs` makes one (`tray::wants_window`), and closing it an
 A check is told which version of Hub is already downloaded; the engine remembers what it told
 (`Own::told_ready`) and shows "Downloading" only for a download the check really makes.
 
+## notes.rs (hub-core), changelog.rs (bins/hub): the release notes view
+`notes::url(app, version, file)` builds `https://github.com/Kaan88/<repo>/releases/download/v<version>/<file>`
+and refuses a file name that is not plain (`manifest::valid_name`), a version with odd characters,
+or an address `CatalogApp::url_allowed` does not allow. `notes::fetch` makes the one GET (64 KiB,
+10 s) and `notes::clean` turns the bytes into text (lossy UTF-8, no CR, control, bidi or
+zero-width characters, at most 64 KiB); a GET error becomes a plain reason ("... (404)", "bigger
+than 64 KiB"). `Store::cached_notes/set_cached_notes` keep the raw bytes in `notes\<id>-<version>.md`.
+The engine (`glue.rs`) holds `notes: Option<NotesOpen>`: `Cmd::OpenNotes` (pane link, row menu,
+key `n`) fills it from the manifest Hub knows and the disk, else starts `work::spawn_notes`, whose
+`Event::Notes {id, version, result}` is taken only by a view still waiting for exactly that
+version (a closed or moved view drops it; the worker has cached it anyway). `Cmd::NotesRetry`
+fetches again from Failed only; `Cmd::NotesPage` opens the release page; Esc and `NotesClose` leave.
+`Vm.notes: Option<NotesVm>` makes `view::draw_full` draw the page instead of the command bar, list
+and pane; `Layout` reports `notes_max_scroll` and `notes_view_h` and new hits `Notes(i)`,
+`NotesBack`, `NotesRetry`, `NotesPage`. `app.rs` keeps the page's own scroll (the list's is kept
+while it is open): wheel, arrows, PageUp/PageDown/Space, Home/End (`changelog::scrolled`, pure).
+The page: header (back arrow, "Release notes of X", the version), the scrolling body in a column
+at most 740 px wide with the shared overlay scrollbar, a footer with `mdedit 1.2.0 -> 1.2.1`, the
+date and "Release page".
+`changelog.rs`: `parse` (headings `#`..`###`, bullet and numbered lists with nesting up to 3 and
+continuation lines, paragraphs, fenced code, rules, table rows as mono lines; the rest is text),
+`inline` (bold, italic, code, links as their text, escapes; an opener with no closer is text;
+`snake_case` is not italic), `layout` (words measured once, wrapped to the column, a word wider
+than the column cut by characters, runs of one style merged, inline code with a fill) and `laid`
+(the layout kept for the text, width and scale), `draw_page`. A scroll frame walks the laid
+primitives and draws those in view. Limits: 20,000 lines, 3,000 blocks, 1,500 characters a line,
+300 lines a code block, 4,000 characters an item, depth 3. Shots: `notes`, `notes-loading`,
+`notes-failed`, `notes-nofile`, `notes-long`, list view only (the view does not depend on it).
+Not covered: a scrollbar drag or click (the thumb is drawn, the wheel and keys move the text),
+an image or a table drawn as a grid, a link that opens.
+
 ## tools/
 `write-hub-txt.ps1` writes a `hub.txt` from a version, app, repository, notes and a list of files
 (name, role file|setup|zip, optional asset name, silent arguments, scope): SHA-256 and sizes from

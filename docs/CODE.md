@@ -59,7 +59,7 @@ while testing.
 
 ```bash
 hub --shot out.png --demo main --view list --dark --size 1280x800 --scale 1.0
-bash tests/shots.sh target/shots/a        # 10 states x 3 views x 2 themes x 2 sizes = 120 PNGs, ~15 s
+bash tests/shots.sh target/shots/a        # states x 3 views x 2 themes x 2 sizes = 120 PNGs, ~15 s
 bash tests/shots.sh target/shots/b        # twice: every PNG must be byte-identical
 bash tests/shots-check.sh target/shots/a  # all present, real PNGs, the size their name says
 ```
