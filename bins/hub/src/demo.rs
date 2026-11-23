@@ -115,6 +115,11 @@ fn app(id: &str, row: Row, installed: Option<&str>, latest: Option<&str>, runnin
             "23 Nov",
             "Uninstalls programs and the leftovers they leave behind.",
         ),
+        "barbican" => (
+            "9.8 MB",
+            "22 Nov",
+            "Mail, calendar, contacts and files in one tray app, with a faster first sync.",
+        ),
         _ => (
             "68.7 MB",
             "17 Nov",

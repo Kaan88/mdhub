@@ -239,3 +239,22 @@ tile is the icon's blue with the `delete` glyph. Its first release, v0.1.0 (alph
 is that file. So once a Hub release carries this entry, Hub can install, detect and update Purge.
 Would change: Purge's release workflow writing a different exe, key or wait list than the sample
 (then the catalog follows the release); the owner taking Purge out.
+
+## D-031 Barbican is the sixth catalog app
+The owner added Barbican beside Purge in the compiled catalog. This entry replaces D-015's "the
+catalog is four apps" and the scope D-030 closes at five; neither older entry is edited. Barbican
+(`Kaan88/barbican`) is a JMAP mail, calendar, contacts and files client that runs in the tray. A
+per-user Inno install in `%LOCALAPPDATA%\Programs\Barbican` (unlike Purge and Sprawl, so no Windows
+prompt), uninstall key its Inno `AppId` `{ACE04D99-4564-4E70-9A43-FE47A6A0E3B5}_is1`, exe
+`barbican.exe`, `wait` is `barbican.exe` (its updater helper is a hidden PowerShell started from
+it), `setup_closes_app` true (its installer closes the running tray app with `CloseApplications`,
+the same reason as D-029). Own icon in `assets/apps/barbican.png`; fallback tile purple with the
+`globe` glyph (the shared set has no mail glyph). The Hub tray/app icon keeps its four nodes
+(D-024); it was not redrawn. No `tools/samples` entry and none possible: a sample carries a real
+release's sizes and hashes, and Barbican has no release. Its installer work is in the Barbican
+repository, branch `installer-inno`, unreleased, so until a release carries `hub.txt` the row shows
+"no release information" and Hub never offers a wrong install. Its own updater does not stand down
+for Hub (D-007 not built).
+Would change: Barbican's release naming or AppId; a mail glyph in the shared set; a Barbican
+release, which adds its sample to `tools/samples` and takes it out of `tests/samples.rs`'s
+no-sample list.
