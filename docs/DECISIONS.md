@@ -204,3 +204,22 @@ exists in the shared fonts, so italic is a softer colour; links are shown as tex
 clickable (a "Release page" button opens the release on github.com/Kaan88 instead).
 Would change: a markdown crate if the notes grow tables and images; a notes file fetched ahead of
 time if the owner wants them offline for versions never opened; clickable links.
+
+## D-029: an app whose own setup closes it is not refused for having no window to close
+
+Found by the owner on 0.1.1 (2026-11-23): updating Inbound failed with "DownloadManager.Host.exe is
+still open" and Sprawl the same. Both run as background or tray processes with no top-level window
+(read-only look: Inbound's Host and Server, six `sprawl.exe`), so the install's polite `WM_CLOSE`
+closes nothing and the install refused (`InstallError::Running`), as D-018's rule of never killing
+requires. But both vendors' installers stop their own app: Sprawl's Inno `CloseApplications=yes`,
+Inbound's `stop-for-setup.ps1` in `PrepareToInstall`. So the catalog says which apps do
+(`setup_closes_app`: Sprawl and Inbound; mdedit and mdview are `files` installs and stay strict).
+For such an app Hub still asks windows to close and waits up to 3 seconds, then runs the setup
+(the owner's yes to "close it and update" is already given); the row says "The installer will
+close <app>" and no longer "close it to continue". If that setup exits non-zero, the error is
+"Setup could not close <app>: exit code N; quit it from its tray icon and try again", the old
+version stays and the verified installer is kept for a retry. Hub itself still never ends a
+process. Inbound's `DownloadManager.Server.exe` joins its wait list. Roll back stays strict
+(D-026): it has no installer.
+Would change: a setup that kills without asking (then the flag goes); an app that gains a quit
+request Hub can send (then ask it instead).

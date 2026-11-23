@@ -8,7 +8,8 @@ v0.1.0 (2026-11-22) and v0.1.1 (2026-11-23), `Kaan88/mdhub`: `Hub-Setup-<v>.exe`
 `hub-update.txt`, `hub.txt`; the release workflow and `ci` passed on GitHub both times. The owner ran
 the installer and the self-update from 0.1.0 to 0.1.1 on their PC (2026-11-23): both worked. Not yet
 run by hand: an elevated setup (Sprawl), an app updated while open, Explorer restarting under the
-tray, the balloon and the tray menu seen live.
+tray, the balloon and the tray menu seen live. 0.1.1 cannot update Inbound or Sprawl while they run
+(no window to close, D-029); the fix is on `main`, not yet released.
 
 ## On `main`, committed
 
