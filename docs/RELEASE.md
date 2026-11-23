@@ -21,8 +21,8 @@ updates itself from it). No tag exists.
   may write the Run key.
 - The installer is `packaging/windows/hub.iss` (Inno, per user, `%LOCALAPPDATA%\Programs\Hub`,
   AppId `{A3D5E8C1-7B42-4F96-8E1D-5C0B2F7A9D64}`, start at login as a task; built locally by
-  `tools/build-installer.ps1`, not yet run by hand). Until it exists nothing installs Hub, so the self-update
-  and "Start with Windows" have only run against scratch copies and test keys.
+  `tools/build-installer.ps1`). The owner ran the installer and a real self-update from 0.1.0 to 0.1.1
+  on 2026-11-23: both worked. "Start with Windows" has only run against test keys.
 
 ## How one will be cut, later
 

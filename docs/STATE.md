@@ -4,10 +4,11 @@ Rewritten, never appended to. What is true now; `git log` is the story.
 
 ## Released
 
-v0.1.0 (2026-11-22, `Kaan88/mdhub`: `Hub-Setup-0.1.0.exe`, `hub.exe`, `hub-update.txt`, `hub.txt`; the
-release workflow and `ci` passed on GitHub). 0.1.1 is being cut: the apps' own icons, the release
-notes page and the review fixes. The installer and a self-update from a real release have not been
-run by hand.
+v0.1.0 (2026-11-22) and v0.1.1 (2026-11-23), `Kaan88/mdhub`: `Hub-Setup-<v>.exe`, `hub.exe`,
+`hub-update.txt`, `hub.txt`; the release workflow and `ci` passed on GitHub both times. The owner ran
+the installer and the self-update from 0.1.0 to 0.1.1 on their PC (2026-11-23): both worked. Not yet
+run by hand: an elevated setup (Sprawl), an app updated while open, Explorer restarting under the
+tray, the balloon and the tray menu seen live.
 
 ## On `main`, committed
 
