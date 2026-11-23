@@ -1,5 +1,5 @@
 //! The apps Hub knows: compiled in. Adding one is a new entry and a release of Hub.
-//! Scope, by the owner: mdedit, mdview, Sprawl, Inbound, Purge.
+//! Scope, by the owner: mdedit, mdview, Sprawl, Inbound, Purge, Barbican.
 
 pub struct CatalogApp {
     /// Lower-case id; the `app:` of its hub.txt.
@@ -33,7 +33,7 @@ pub struct CatalogApp {
     pub glyph: &'static str,
 }
 
-pub const CATALOG: [CatalogApp; 5] = [
+pub const CATALOG: [CatalogApp; 6] = [
     CatalogApp {
         id: "mdedit",
         name: "mdedit",
@@ -121,6 +121,22 @@ pub const CATALOG: [CatalogApp; 5] = [
         tile: [0x25, 0x63, 0xeb],
         glyph: "delete",
     },
+    CatalogApp {
+        id: "barbican",
+        name: "Barbican",
+        blurb: "Mail, calendar, contacts and files for JMAP servers",
+        repo: "barbican",
+        exe: "barbican.exe",
+        launch_args: &[],
+        folder: "Barbican",
+        machine_folder: None,
+        uninstall_keys: &["{ACE04D99-4564-4E70-9A43-FE47A6A0E3B5}_is1"],
+        wait: &["barbican.exe"],
+        setup_closes_app: true,
+        legacy_manifest: None,
+        tile: [0x8a, 0x4a, 0xb8],
+        glyph: "globe",
+    },
 ];
 
 pub fn find(id: &str) -> Option<&'static CatalogApp> {
@@ -155,7 +171,22 @@ mod tests {
             .filter(|a| a.setup_closes_app)
             .map(|a| a.id)
             .collect();
-        assert_eq!(flagged, ["sprawl", "inbound", "purge"]);
+        assert_eq!(flagged, ["sprawl", "inbound", "purge", "barbican"]);
+    }
+
+    #[test]
+    fn barbicans_entry_matches_its_installer() {
+        let b = find("barbican").unwrap();
+        assert_eq!(b.exe, "barbican.exe");
+        assert_eq!(b.folder, "Barbican");
+        assert_eq!(b.machine_folder, None);
+        assert_eq!(
+            b.uninstall_keys,
+            ["{ACE04D99-4564-4E70-9A43-FE47A6A0E3B5}_is1"]
+        );
+        assert!(b.wait.contains(&"barbican.exe"));
+        assert!(b.url_allowed("https://github.com/Kaan88/barbican/releases/download/v0.1.0/x"));
+        assert!(!b.url_allowed("https://github.com/Kaan88/inbound/releases/download/v0.1.0/x"));
     }
 
     #[test]
