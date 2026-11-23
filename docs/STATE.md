@@ -128,6 +128,18 @@ run by hand.
   30 MiB budget holds at rest only.
 - Samples have CRLF in a Windows checkout; no `.gitattributes`.
 
+## Reviewed, and by whom
+
+- Fable (a second model) reviewed the whole repository once, up to `8b2543a` (the new icon): three
+  passes, six defects fixed with tests (`48a9005` to `1f1a161`), 36 safety rules mutation-checked,
+  200,000 fuzzed inputs, the FFI read for leaks. Its list of things needing the owner is under
+  "Known wrong".
+- Not reviewed by Fable, written and checked by Sonnet agents only: the apps' own icons (`cb25ff4`),
+  the release notes page and its fetch and cache (`67d423c`), the 0.1.1 bump, and the first builds
+  (two Sonnet reviewers per module). The four notes-file follow-up PRs (mdedit #11, mdview #8,
+  Sprawl #2, Inbound #54) had no reviewer besides their author.
+- No human has read the code.
+
 ## Next
 
 1. The owner decides the repository name for Hub and whether to release (`docs/RELEASE.md`).
