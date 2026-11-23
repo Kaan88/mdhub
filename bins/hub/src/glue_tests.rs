@@ -774,3 +774,17 @@ fn closing_stops_the_install_and_the_queue_and_waits_for_the_worker() {
         "the queue did not run"
     );
 }
+
+#[test]
+fn a_progress_report_of_a_self_closing_app_says_the_installer_closes_it() {
+    use hub_core::install::Progress;
+    match crate::glue::phase_of(Progress::SetupCloses("Inbound".into())) {
+        Some(crate::glue::Phase::Waiting(t)) => assert_eq!(t, "The installer will close Inbound"),
+        other => panic!("{other:?}"),
+    }
+    match crate::glue::phase_of(Progress::Waiting("mdedit.exe".into())) {
+        Some(crate::glue::Phase::Waiting(t)) => assert!(t.contains("close it to continue"), "{t}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(crate::glue::phase_of(Progress::Finished).is_none());
+}

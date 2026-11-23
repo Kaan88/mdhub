@@ -40,6 +40,9 @@ pub enum Progress {
     Verifying(String),
     /// Waiting for the named program to close.
     Waiting(String),
+    /// The app (its name) is still open and its own setup will close it: Hub goes on and runs
+    /// the setup (D-029). Shown while the setup runs, in place of `Placing`.
+    SetupCloses(String),
     Placing,
     Finished,
 }
@@ -66,6 +69,12 @@ pub enum InstallError {
     },
     /// A program of the app is still open after the wait.
     Running(String),
+    /// The app's own setup, run with the app still open, exited with a failure: it could not close
+    /// the app (D-029). The old version is in place.
+    SetupCouldNotClose {
+        name: String,
+        code: u32,
+    },
     /// A file operation failed (the reason says which).
     Io(String),
     /// The installer ran and exited with this code (or could not be run: `None`).
@@ -94,6 +103,10 @@ impl fmt::Display for InstallError {
                 "{file} did not match its {what}: expected {expected}, received {received}"
             ),
             Self::Running(s) => write!(f, "{s} is still open"),
+            Self::SetupCouldNotClose { name, code } => write!(
+                f,
+                "Setup could not close {name}: exit code {code}; quit it from its tray icon and try again"
+            ),
             Self::Io(s) => write!(f, "{s}"),
             Self::Setup {
                 code: Some(c),
@@ -402,6 +415,16 @@ fn ensure_closed(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     progress(Progress::Waiting(label.clone()));
+    if ask_and_wait(exes, opts, opts.close_timeout)? {
+        Ok(())
+    } else {
+        Err(InstallError::Running(label))
+    }
+}
+
+/// Asks the running programs among `exes` to close (every second) and waits up to `timeout`.
+/// `Ok(true)`: they are gone. `Ok(false)`: some remain. Never kills.
+fn ask_and_wait(exes: &[PathBuf], opts: &Opts, timeout: Duration) -> Result<bool, InstallError> {
     let start = Instant::now();
     let mut last_ask: Option<Instant> = None;
     loop {
@@ -411,15 +434,39 @@ fn ensure_closed(
         }
         std::thread::sleep(opts.poll);
         if !opts.closer.is_running(exes) {
-            return Ok(());
+            return Ok(true);
         }
         if opts.cancelled() {
             return Err(InstallError::Cancelled);
         }
-        if start.elapsed() >= opts.close_timeout {
-            return Err(InstallError::Running(label));
+        if start.elapsed() >= timeout {
+            return Ok(false);
         }
     }
+}
+
+/// How long Hub waits for the windows of an app whose own setup closes it (D-029) before it
+/// runs that setup anyway. Such an app (a tray program) has no window to answer.
+const SETUP_CLOSES_WAIT: Duration = Duration::from_secs(3);
+
+/// For an app whose own setup stops it: asks its windows to close, waits briefly, and says
+/// whether programs of it remain (`true`: the setup will have to stop them). Nothing is killed
+/// here. A cancel during the wait is `Cancelled`.
+fn ask_then_leave_to_setup(
+    app: &CatalogApp,
+    exes: &[PathBuf],
+    opts: &Opts,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<bool, InstallError> {
+    if exes.is_empty() || !opts.closer.is_running(exes) {
+        return Ok(false);
+    }
+    progress(Progress::SetupCloses(app.name.to_string()));
+    Ok(!ask_and_wait(
+        exes,
+        opts,
+        opts.close_timeout.min(SETUP_CLOSES_WAIT),
+    )?)
 }
 
 /// Installs or updates `app` from `m`. `cur` is what is there now, if anything.
@@ -448,7 +495,11 @@ pub fn install(
             progress(Progress::Finished);
         }
         // A verified download is worth keeping when the user can simply try again.
-        Err(InstallError::Cancelled | InstallError::Running(_)) => {}
+        Err(
+            InstallError::Cancelled
+            | InstallError::Running(_)
+            | InstallError::SetupCouldNotClose { .. },
+        ) => {}
         Err(_) => {
             _ = selfupdate::remove_any(&cache);
         }
@@ -674,8 +725,16 @@ fn install_setup(
     if opts.cancelled() {
         return Err(InstallError::Cancelled);
     }
+    // An app whose own setup closes it (D-029) may still be open after the polite ask: the
+    // setup is run anyway, and a failure of it then is reported as "could not close".
+    let mut setup_must_close = false;
     if let Some(c) = cur {
-        ensure_closed(&app_exes(app, entry, &c.folder), opts, progress)?;
+        let exes = app_exes(app, entry, &c.folder);
+        if app.setup_closes_app {
+            setup_must_close = ask_then_leave_to_setup(app, &exes, opts, progress)?;
+        } else {
+            ensure_closed(&exes, opts, progress)?;
+        }
         if opts.cancelled() {
             return Err(InstallError::Cancelled);
         }
@@ -696,7 +755,9 @@ fn install_setup(
     }
     // What is there now, to tell afterwards whether the installer changed anything.
     let before = cur.and_then(|c| fingerprint(&c.exe));
-    progress(Progress::Placing);
+    if !setup_must_close {
+        progress(Progress::Placing);
+    }
     let dir = installer.parent().unwrap_or(cache).to_path_buf();
     let ran = match &opts.elevate {
         Elevation::Real => sys::run_setup(&installer, &setup.silent, &dir, setup.scope),
@@ -704,6 +765,12 @@ fn install_setup(
     };
     drop(lock);
     let code = ran.map_err(|reason| InstallError::Setup { code: None, reason })?;
+    if code != 0 && setup_must_close {
+        return Err(InstallError::SetupCouldNotClose {
+            name: app.name.to_string(),
+            code,
+        });
+    }
     if code != 0 {
         return Err(InstallError::Setup {
             code: Some(code),
@@ -1100,6 +1167,7 @@ mod tests {
         machine_folder: None,
         uninstall_keys: &[],
         wait: &["fake-engine.exe"],
+        setup_closes_app: false,
         legacy_manifest: None,
         tile: [0, 0, 0],
         glyph: "",
@@ -2030,6 +2098,155 @@ mod tests {
                 "{want} in {seen:?}"
             );
         }
+    }
+
+    /// An app whose own setup stops it (Sprawl, Inbound; D-029).
+    const CLOSING: CatalogApp = CatalogApp {
+        setup_closes_app: true,
+        ..APP
+    };
+
+    fn run_app(
+        app: &CatalogApp,
+        rig: &Rig,
+        m: &HubManifest,
+        cur: Option<&Installed>,
+        t: &FakeTransport,
+        opts: &Opts,
+    ) -> (Result<Installed, InstallError>, Vec<Progress>) {
+        let mut seen = Vec::new();
+        let r = install(app, m, cur, &rig.store, t, opts, &mut |p| seen.push(p));
+        (r, seen)
+    }
+
+    #[test]
+    fn an_app_with_no_window_that_its_setup_closes_gets_the_setup_run() {
+        let rig = Rig::new("closing-ok");
+        put(&rig, "fake.exe", b"old");
+        let r = runner(0, Some(rig.folder()));
+        let mut opts = setup_opts(&rig, r.clone());
+        // Open, and no window answers: it never closes by being asked.
+        let closer = Arc::new(FakeCloser::new(true, false));
+        opts.closer = closer.clone();
+        let (m, t) = setup_manifest(Scope::User);
+        let cur = rig.current();
+        let (res, seen) = run_app(&CLOSING, &rig, &m, Some(&cur), &t, &opts);
+        let inst = res.expect("the setup was run and succeeded");
+        assert_eq!(inst.version, Version::parse("3.0.0").ok());
+        assert_eq!(r.seen.lock().unwrap().len(), 1, "the setup ran once");
+        assert!(
+            closer.asks.load(Ordering::Relaxed) >= 1,
+            "windows were asked first"
+        );
+        assert_eq!(read(&rig.folder().join("fake.exe")), b"installed");
+        // The words say what is going on; it is not the "open: close it" wait.
+        assert!(
+            seen.contains(&Progress::SetupCloses("Fake".into())),
+            "{seen:?}"
+        );
+        assert!(
+            !seen.iter().any(|p| matches!(p, Progress::Waiting(_))),
+            "{seen:?}"
+        );
+        assert!(!seen.contains(&Progress::Placing), "{seen:?}");
+    }
+
+    #[test]
+    fn the_same_open_app_without_the_flag_is_still_refused() {
+        let rig = Rig::new("closing-strict");
+        put(&rig, "fake.exe", b"old");
+        let r = runner(0, Some(rig.folder()));
+        let mut opts = setup_opts(&rig, r.clone());
+        opts.closer = Arc::new(FakeCloser::new(true, false));
+        let (m, t) = setup_manifest(Scope::User);
+        let cur = rig.current();
+        let (res, seen) = run_app(&APP, &rig, &m, Some(&cur), &t, &opts);
+        assert_eq!(res, Err(InstallError::Running("fake.exe".into())));
+        assert!(r.seen.lock().unwrap().is_empty());
+        assert!(seen.contains(&Progress::Waiting("fake.exe".into())));
+        assert!(!seen.iter().any(|p| matches!(p, Progress::SetupCloses(_))));
+    }
+
+    #[test]
+    fn the_flag_does_not_loosen_a_files_install() {
+        let rig = Rig::new("closing-files");
+        put(&rig, "fake.exe", b"exe v1");
+        let mut opts = rig.opts();
+        opts.closer = Arc::new(FakeCloser::new(true, false));
+        let t = transport(&[("fake.exe", b"exe v2")]);
+        let m = files_manifest("2.0.0", &[("fake.exe", b"exe v2")]);
+        let cur = rig.current();
+        let (res, _) = run_app(&CLOSING, &rig, &m, Some(&cur), &t, &opts);
+        assert_eq!(res, Err(InstallError::Running("fake.exe".into())));
+        assert_eq!(read(&rig.folder().join("fake.exe")), b"exe v1");
+    }
+
+    #[test]
+    fn a_setup_that_could_not_close_the_app_says_so_and_leaves_the_old_version() {
+        let rig = Rig::new("closing-fail");
+        put(&rig, "fake.exe", b"old");
+        let r = runner(1, Some(rig.folder()));
+        let mut opts = setup_opts(&rig, r.clone());
+        opts.closer = Arc::new(FakeCloser::new(true, false));
+        opts.redetect = Some(Arc::new(|_, _| panic!("must not look: setup failed")));
+        let (m, t) = setup_manifest(Scope::User);
+        let cur = rig.current();
+        let (res, _) = run_app(&CLOSING, &rig, &m, Some(&cur), &t, &opts);
+        let err = res.unwrap_err();
+        assert_eq!(
+            err,
+            InstallError::SetupCouldNotClose {
+                name: "Fake".into(),
+                code: 1
+            }
+        );
+        assert_eq!(
+            err.to_string(),
+            "Setup could not close Fake: exit code 1; quit it from its tray icon and try again"
+        );
+        assert_eq!(read(&rig.folder().join("fake.exe")), b"old");
+        assert!(
+            rig.store.load_installed("fake").is_none(),
+            "nothing recorded"
+        );
+        assert!(
+            rig.cache("3.0.0").join("fake-setup.exe").is_file(),
+            "the verified installer is kept for a retry"
+        );
+    }
+
+    #[test]
+    fn a_failing_setup_of_a_closed_app_is_not_blamed_on_the_app_being_open() {
+        let rig = Rig::new("closing-fail-closed");
+        put(&rig, "fake.exe", b"old");
+        let mut opts = setup_opts(&rig, runner(1, None));
+        opts.closer = Arc::new(FakeCloser::new(false, false));
+        let (m, t) = setup_manifest(Scope::User);
+        let cur = rig.current();
+        let (res, seen) = run_app(&CLOSING, &rig, &m, Some(&cur), &t, &opts);
+        assert!(
+            matches!(res, Err(InstallError::Setup { code: Some(1), .. })),
+            "{res:?}"
+        );
+        assert!(seen.contains(&Progress::Placing), "closed: the usual words");
+        assert!(!seen.iter().any(|p| matches!(p, Progress::SetupCloses(_))));
+    }
+
+    #[test]
+    fn cancel_while_waiting_for_a_self_closing_app_runs_no_setup() {
+        let rig = Rig::new("closing-cancel");
+        put(&rig, "fake.exe", b"old");
+        let r = runner(0, Some(rig.folder()));
+        let mut opts = setup_opts(&rig, r.clone());
+        let mut closer = FakeCloser::new(true, false);
+        closer.cancel_on_ask = Some(opts.cancel.clone());
+        opts.closer = Arc::new(closer);
+        let (m, t) = setup_manifest(Scope::User);
+        let cur = rig.current();
+        let (res, _) = run_app(&CLOSING, &rig, &m, Some(&cur), &t, &opts);
+        assert_eq!(res, Err(InstallError::Cancelled));
+        assert!(r.seen.lock().unwrap().is_empty(), "the installer never ran");
+        assert_eq!(read(&rig.folder().join("fake.exe")), b"old");
     }
 
     #[test]

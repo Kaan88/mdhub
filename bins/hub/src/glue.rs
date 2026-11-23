@@ -227,6 +227,27 @@ pub fn system_env() -> Env {
 
 // ---- the row of one app -------------------------------------------------------------------------
 
+/// The row phase a progress report puts an install in; `None` for the last word (`Finished`), which
+/// the finishing event handles.
+pub fn phase_of(p: Progress) -> Option<Phase> {
+    Some(match p {
+        Progress::Downloading { done, total, .. } => Phase::Downloading {
+            frac: if total == 0 {
+                0.0
+            } else {
+                (done as f32 / total as f32).clamp(0.0, 1.0)
+            },
+            text: progress_text(done, total),
+        },
+        Progress::Verifying(_) => Phase::Verifying,
+        Progress::Waiting(n) => Phase::Waiting(format!("{n} is open: close it to continue")),
+        // The app's own setup closes it (D-029): not "close it yourself".
+        Progress::SetupCloses(n) => Phase::Waiting(format!("The installer will close {n}")),
+        Progress::Placing => Phase::Placing,
+        Progress::Finished => return None,
+    })
+}
+
 /// What Hub is doing with one app right now.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Phase {
@@ -2122,21 +2143,8 @@ impl Engine {
                 result,
             } => self.handle_notes(id, version, result),
             Event::Progress { id, p } => {
-                let phase = match p {
-                    Progress::Downloading { done, total, .. } => Phase::Downloading {
-                        frac: if total == 0 {
-                            0.0
-                        } else {
-                            (done as f32 / total as f32).clamp(0.0, 1.0)
-                        },
-                        text: progress_text(done, total),
-                    },
-                    Progress::Verifying(_) => Phase::Verifying,
-                    Progress::Waiting(n) => {
-                        Phase::Waiting(format!("{n} is open: close it to continue"))
-                    }
-                    Progress::Placing => Phase::Placing,
-                    Progress::Finished => return false,
+                let Some(phase) = phase_of(p) else {
+                    return false;
                 };
                 // A late event of a job that was cancelled must not bring its row back.
                 if self.active.as_ref().is_some_and(|a| a.id == id) {

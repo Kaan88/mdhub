@@ -20,6 +20,11 @@ pub struct CatalogApp {
     pub uninstall_keys: &'static [&'static str],
     /// Executables (relative) that must be gone before an install, besides `exe`.
     pub wait: &'static [&'static str],
+    /// The app's own setup stops the running app (Inno `CloseApplications`, or a stop script), as
+    /// double-clicking it would. For such an app Hub asks visible windows to close, then goes on
+    /// and runs the setup instead of refusing with "still open" (D-029). Only meaningful for a
+    /// setup install; a `files` install has no installer to do it and stays strict.
+    pub setup_closes_app: bool,
     /// The format-1/2 manifest file of the release that mdedit and mdview publish; a stopgap
     /// until their release carries hub.txt. None for apps that have no such file.
     pub legacy_manifest: Option<&'static str>,
@@ -40,6 +45,7 @@ pub const CATALOG: [CatalogApp; 4] = [
         machine_folder: None,
         uninstall_keys: &["{C58A9AB1-8337-4056-9953-04E92C05F414}_is1"],
         wait: &["mdedit-ai.exe", "mdview-engine.exe"],
+        setup_closes_app: false,
         legacy_manifest: Some("mdedit-update-2.txt"),
         tile: [0x2f, 0x6f, 0xd6],
         glyph: "edit",
@@ -55,6 +61,7 @@ pub const CATALOG: [CatalogApp; 4] = [
         machine_folder: None,
         uninstall_keys: &["{B7E2F4A9-3D1C-4C58-A6E0-91D5C8F27B34}_is1"],
         wait: &["mdview-engine.exe"],
+        setup_closes_app: false,
         legacy_manifest: Some("mdview-update.txt"),
         tile: [0x1d, 0x7d, 0x6b],
         glyph: "view",
@@ -70,6 +77,7 @@ pub const CATALOG: [CatalogApp; 4] = [
         machine_folder: Some("Sprawl"),
         uninstall_keys: &["Sprawl_is1"],
         wait: &[],
+        setup_closes_app: true,
         legacy_manifest: None,
         tile: [0xc0, 0x6a, 0x1a],
         glyph: "folder",
@@ -88,7 +96,9 @@ pub const CATALOG: [CatalogApp; 4] = [
             "app\\DownloadManager.Host.exe",
             "app\\DownloadManager.Desktop.WinUI.exe",
             "app\\DownloadManager.NativeHost.exe",
+            "app\\DownloadManager.Server.exe",
         ],
+        setup_closes_app: true,
         legacy_manifest: None,
         tile: [0x1d, 0x8a, 0x9e],
         glyph: "download",
@@ -113,5 +123,33 @@ impl CatalogApp {
             "https://github.com/Kaan88/{}/releases/download/",
             self.repo
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_apps_whose_own_setup_stops_them_are_flagged() {
+        let flagged: Vec<&str> = CATALOG
+            .iter()
+            .filter(|a| a.setup_closes_app)
+            .map(|a| a.id)
+            .collect();
+        assert_eq!(flagged, ["sprawl", "inbound"]);
+    }
+
+    #[test]
+    fn inbounds_wait_list_has_every_program_its_stop_script_covers_that_hub_can_place() {
+        let inbound = find("inbound").unwrap();
+        for exe in [
+            r"app\DownloadManager.Host.exe",
+            r"app\DownloadManager.Desktop.WinUI.exe",
+            r"app\DownloadManager.NativeHost.exe",
+            r"app\DownloadManager.Server.exe",
+        ] {
+            assert!(inbound.wait.contains(&exe), "{exe}");
+        }
     }
 }
