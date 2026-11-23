@@ -4,14 +4,13 @@ Rewritten, never appended to. What is true now; `git log` is the story.
 
 ## Released
 
-v0.1.0 (2026-11-22), v0.1.1 and v0.1.2 (2026-11-23), `Kaan88/mdhub`: `Hub-Setup-<v>.exe`,
+v0.1.0 (2026-11-22), v0.1.1, v0.1.2 and v0.1.3 (2026-11-23), `Kaan88/mdhub`: `Hub-Setup-<v>.exe`,
 `hub.exe`, `hub-update.txt`, `hub.txt`; `ci` and the release workflow passed on GitHub for each. The
 owner ran the installer and the self-update from 0.1.0 to 0.1.1 on their PC (2026-11-23): both
-worked. Every release so far carries four apps; the six-app catalog (Purge D-030, Barbican D-031) is
-on `main` and no release has it yet. Not yet run by hand: an elevated setup (Sprawl, Purge), an app
-updated while open, Explorer restarting under the tray, the balloon and the tray menu seen live.
-0.1.1 could not update Inbound or Sprawl while they ran (no window to close); 0.1.2 has the fix
-(D-029), not yet confirmed on the owner's PC.
+worked. 0.1.3 is the first release whose catalog has six apps (Purge D-030, Barbican D-031). Not yet
+run by hand: an elevated setup (Sprawl, Purge), an app updated while open, Explorer restarting under
+the tray, the balloon and the tray menu seen live. 0.1.1 could not update Inbound or Sprawl while
+they ran (no window to close); 0.1.2 has the fix (D-029), not yet confirmed on the owner's PC.
 
 ## On `main`, committed
 
@@ -56,14 +55,14 @@ updated while open, Explorer restarting under the tray, the balloon and the tray
   notes" link and the key `n`; Esc, Backspace or the arrow go back. `notes` shows at once;
   `notes.file` is one GET (64 KiB, 10 s) only when the view is opened, kept on disk by app and
   version; loading, loaded, failed (reason, Try again) and no file are drawn.
-- Verified 2026-11-23 on this PC, on the branch that became the six-app catalog: `cargo fmt --all
-  --check` clean; `cargo clippy --release --workspace --all-targets -- -D warnings` clean, and the
-  same with `--features test-hooks`; `cargo test --workspace --release` 161 passed (hub, 1 ignored:
-  the icon generator) + 201 passed (hub-core, 1 ignored) + 2 (samples); `tests/shots.sh` 176 PNGs,
-  `tests/shots-check.sh` 0 bad. The `all` list shot was looked at: the Purge and Barbican rows draw
-  with their own icons and texts. Before it: the notes view 2026-11-23 (tests 159 + 188, shots
-  twice, byte-identical); the whole repository 2026-11-22 (tests 129 + 183, clippy with and without
-  test-hooks, no `HKCU\Software\HubTest` left behind).
+- Verified 2026-11-23 on this PC, on the six-app catalog and again on `main` after both catalog PRs
+  were merged: `cargo fmt --all --check` clean; `cargo clippy --release --workspace --all-targets --
+  -D warnings` clean, and the same with `--features test-hooks`; `cargo test --workspace --release`
+  161 passed (hub, 1 ignored: the icon generator) + 201 passed (hub-core, 1 ignored) + 2 (samples);
+  `tests/shots.sh` 176 PNGs, `tests/shots-check.sh` 0 bad. The `all` list shot was looked at: the
+  Purge and Barbican rows draw with their own icons and texts. Before it: the notes view 2026-11-23
+  (tests 159 + 188, shots twice, byte-identical); the whole repository 2026-11-22 (tests 129 + 183,
+  clippy with and without test-hooks, no `HKCU\Software\HubTest` left behind).
 - Reviewed 2026-11-22, the whole repository: 36 safety rules were removed one at a time (hash and
   size checks, URL pins, the Run value's quoting, asking before closing, one install at a time);
   33 failed a test, 2 had none and got one, 1 is covered by a second check. 200,000 mutated

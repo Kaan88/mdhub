@@ -23,7 +23,7 @@ Its sisters are `Kaan88/markdown-editor-rs` (mdedit; on this PC
    - `docs/COMPLIANCE.md`: what an app must do to work with Hub (the contract other repositories'
      agents read; keep it true when the parser, the catalog or the install rules change).
    - `docs/APP-CHANGES.md`: what each app must change for Hub (proposals, not applied).
-   - `docs/RELEASE.md`: how a release will be cut. None has been.
+   - `docs/RELEASE.md`: how a release is cut.
 
 ## What it is, and what it refuses to be
 
