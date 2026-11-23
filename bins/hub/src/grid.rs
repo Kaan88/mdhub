@@ -194,7 +194,7 @@ fn large(
     let cx = c.cx();
     // The icon.
     let t = Rect::new(cx - 28.0, c.y + 16.0, 56.0, 56.0);
-    ui::tile(p, t, a.glyph, a.tile, not_in);
+    ui::app_tile(p, t, a.id, a.glyph, a.tile, not_in);
     badges(p, pal, t, a, bg);
     p.icon(glyph::MORE, 15.0, c.right() - 16.0, c.y + 16.0, pal.muted);
     hits.push((
@@ -327,7 +327,7 @@ fn small(
     let dim = matches!(a.row, Row::NotInstalled);
     let cx = c.cx();
     let t = Rect::new(cx - 22.0, c.y + 12.0, 44.0, 44.0);
-    ui::tile(p, t, a.glyph, a.tile, dim);
+    ui::app_tile(p, t, a.id, a.glyph, a.tile, dim);
     badges(p, pal, t, a, bg);
     let tw = (c.w - 12.0).max(0.0);
     let line = |y: f32| Rect::new(c.x + 6.0, y - 9.0, tw, 18.0);

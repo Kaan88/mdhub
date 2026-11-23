@@ -730,3 +730,153 @@ fn a_shot_of_more_than_64_million_pixels_is_refused() {
     assert!(shot::parse(&s(&fine)).is_ok());
     assert_eq!(shot::run(&s(&big)), 2);
 }
+
+// ---- the apps' own icons ----
+
+fn paint_icon_tile(id: &'static str, side: f32, scale: f32, dim: bool) -> Bitmap {
+    let mut gfx = Gfx::new();
+    let n = (side * scale) as u32 + 20;
+    let mut bmp = Bitmap::new(n, n);
+    bmp.clear([255, 255, 255]);
+    let mut p = Painter::new(&mut bmp, &mut gfx, scale);
+    ui::app_tile(
+        &mut p,
+        Rect::new(10.0 / scale, 10.0 / scale, side, side),
+        id,
+        "folder",
+        [0x2f, 0x6f, 0xd6],
+        dim,
+    );
+    bmp
+}
+
+fn colours(bmp: &Bitmap) -> usize {
+    let mut v: Vec<[u8; 4]> = bmp.pixels.as_chunks::<4>().0.to_vec();
+    v.sort_unstable();
+    v.dedup();
+    v.len()
+}
+
+#[test]
+fn every_catalog_app_has_an_embedded_icon_that_decodes_to_a_square_of_pixels() {
+    for app in &hub_core::catalog::CATALOG {
+        let bytes = crate::appicon::bytes_of(app.id)
+            .unwrap_or_else(|| panic!("{} has no embedded icon", app.id));
+        assert!(bytes.len() < 40_000, "{}: {} bytes", app.id, bytes.len());
+        let s =
+            crate::appicon::decode(bytes).unwrap_or_else(|| panic!("{} does not decode", app.id));
+        assert_eq!((s.w, s.h), (128, 128), "{}", app.id);
+        assert_eq!(s.rgba.len(), 128 * 128 * 4);
+        assert!(s.rgba.chunks(4).any(|c| c[3] > 0), "{} is empty", app.id);
+    }
+    assert_eq!(
+        crate::appicon::ids().count(),
+        hub_core::catalog::CATALOG.len()
+    );
+}
+
+#[test]
+fn an_app_tile_paints_the_icon_and_not_the_flat_tile_colour() {
+    for id in crate::appicon::ids() {
+        for scale in [1.0, 1.5, 2.0] {
+            let bmp = paint_icon_tile(id, 32.0, scale, false);
+            let flat = paint_icon_tile("not-an-app", 32.0, scale, false);
+            assert!(
+                colours(&bmp) > 12,
+                "{id} @{scale}: {} colours, a flat tile",
+                colours(&bmp)
+            );
+            assert_ne!(bmp.pixels, flat.pixels, "{id} drew the fallback tile");
+        }
+    }
+}
+
+#[test]
+fn a_dimmed_icon_is_fainter_than_a_plain_one() {
+    for id in crate::appicon::ids() {
+        let plain = paint_icon_tile(id, 40.0, 1.0, false);
+        let dim = paint_icon_tile(id, 40.0, 1.0, true);
+        let dist = |b: &Bitmap| -> u64 {
+            b.pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| (255 - c[0] as u64) + (255 - c[1] as u64) + (255 - c[2] as u64))
+                .sum()
+        };
+        assert!(dist(&dim) < dist(&plain), "{id}: dim is not fainter");
+    }
+}
+
+#[test]
+fn the_glyph_tile_is_the_fallback_for_an_app_without_a_usable_icon() {
+    // An id with no icon draws the coloured tile.
+    let bmp = paint_icon_tile("not-an-app", 32.0, 1.0, false);
+    assert_eq!(
+        &bmp.pixels[(26 * bmp.width as usize + 26) * 4..][..3],
+        &[0xd6, 0x6f, 0x2f]
+    );
+    // Corrupt, empty and truncated bytes are refused, not drawn and not a panic.
+    let mut gfx = Gfx::new();
+    let mut b = Bitmap::new(64, 64);
+    let mut p = Painter::new(&mut b, &mut gfx, 1.0);
+    let good = crate::appicon::bytes_of("mdedit").unwrap();
+    let r = Rect::new(4.0, 4.0, 32.0, 32.0);
+    assert!(!crate::appicon::draw_bytes(
+        &mut p,
+        r,
+        "bad-a",
+        b"not a png at all",
+        false
+    ));
+    assert!(!crate::appicon::draw_bytes(&mut p, r, "bad-b", &[], false));
+    assert!(!crate::appicon::draw_bytes(
+        &mut p,
+        r,
+        "bad-c",
+        &good[..good.len() / 2],
+        false
+    ));
+    assert!(crate::appicon::draw_bytes(&mut p, r, "good", good, false));
+}
+
+#[test]
+fn a_zero_or_odd_size_icon_neither_panics_nor_draws() {
+    let mut gfx = Gfx::new();
+    let mut b = Bitmap::new(32, 32);
+    let mut p = Painter::new(&mut b, &mut gfx, 1.0);
+    let good = crate::appicon::bytes_of("mdview").unwrap();
+    for r in [
+        Rect::new(0.0, 0.0, 0.0, 0.0),
+        Rect::new(0.0, 0.0, 0.2, 0.2),
+        Rect::new(0.0, 0.0, -5.0, 8.0),
+        Rect::new(f32::NAN, 0.0, 16.0, 16.0),
+        Rect::new(-100.0, -100.0, 32.0, 32.0),
+        Rect::new(20.0, 20.0, 64.0, 64.0),
+    ] {
+        crate::appicon::draw_bytes(&mut p, r, "odd", good, false);
+    }
+    let src = crate::appicon::Src {
+        rgba: vec![0; 3],
+        w: 0,
+        h: 0,
+    };
+    assert!(crate::appicon::scale(&src, 16).iter().all(|&v| v == 0));
+    assert!(crate::appicon::scale(&crate::appicon::decode(good).unwrap(), 0).is_empty());
+    assert!(crate::appicon::decode(&[0x89, b'P', b'N', b'G']).is_none());
+}
+
+#[test]
+fn the_scaled_icon_is_the_right_size_and_not_blank_at_every_size() {
+    for id in crate::appicon::ids() {
+        let src = crate::appicon::decode(crate::appicon::bytes_of(id).unwrap()).unwrap();
+        for side in [16u32, 32, 56, 100, 160] {
+            let v = crate::appicon::scale(&src, side);
+            assert_eq!(v.len(), (side * side * 4) as usize);
+            assert!(
+                v.chunks(4).any(|c| c[3] > 40),
+                "{id}@{side}: nothing visible"
+            );
+        }
+    }
+}

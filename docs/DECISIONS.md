@@ -169,3 +169,15 @@ The bar asks about updates only, so a roll back of an open app says "Close <app>
 back" and starts nothing (at the click, and again at its turn in the queue). Before, it was the
 one path that posted `WM_CLOSE` to an open app without a yes. Refines D-010 and D-012. Would
 change: a bar that can ask about a roll back too.
+
+## D-027 Each app shows its own icon; the catalog's colour and glyph are the fallback
+The first slice drew a coloured tile with a generic glyph (copied from a mock); the plan (section
+3.1) said each app's own icon, copied in at build time. One 128 px PNG per app is committed in
+`assets/apps/` and compiled in: mdedit and mdview from the 128 px frame of their `.ico`, Sprawl from
+`assets/sprawl-256.png` and Inbound from `assets/app.png` (both 256 px, downscaled with a bicubic
+filter). Decoded lazily with the shared `decode_png_rgba`, scaled once per (app, side) into a
+cache, blended with `fill_dev`; no new dependency, about 43 KB more in the exe, nothing on the
+launch path. The copies are a snapshot: an app that changes its icon needs the file replaced in a
+Hub release (no fetching of icons: Hub talks to GitHub releases only). Inbound's icon is line art
+on a transparent ground, so on the dark theme its navy outline is faint. Replaces the generic tiles of the first slice (no earlier decision named them).
+Would change: a request for icons that follow the apps' releases.

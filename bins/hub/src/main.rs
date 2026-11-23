@@ -15,6 +15,7 @@ macro_rules! eprintln {
 
 #[cfg(windows)]
 mod app;
+mod appicon;
 mod cli;
 mod demo;
 mod glue;

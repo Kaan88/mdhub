@@ -27,12 +27,16 @@ only. Whether `ci` has run there was not looked at. The owner has not asked for 
   `release`: written, the installer never built or run here, `release` never run.
 - The icon (D-024): a white hub and four nodes in the apps' colours on a dark tile, drawn only
   in `icon.rs`; `assets/hub.ico` is packed from it by `tools/make-icon.ps1`.
+- The apps' own icons (D-027): list, large and small views draw each app's own icon, one 128 px
+  PNG in `assets/apps/<id>.png` (mdedit, mdview from their .ico's 128 frame; Sprawl, Inbound
+  from their 256 px PNG, downscaled), decoded on the first draw, scaled once per size. The
+  catalog `tile`/`glyph` draw only when an icon does not decode.
 - Closing an app (D-025, D-026): the offer bar's yes covers one install; a roll back of an open
   app is not started; a question with no window opens the window.
 - Settings card: start with Windows, tray, notifications, check interval, update Hub.
 - Verified 2026-11-22 on this PC: `cargo fmt --all --check` clean; `cargo clippy --workspace
   --all-targets -D warnings` clean with and without `--features hub/test-hooks`; `cargo test
-  --workspace` 123 (hub, 1 ignored: the icon generator) + 183 (hub-core, 1 ignored), same with
+  --workspace` 129 (hub, 1 ignored: the icon generator) + 183 (hub-core, 1 ignored), same with
   test-hooks; no `HKCU\Software\HubTest` left behind. Shots: 156 PNGs, check clean.
 - Reviewed 2026-11-22, the whole repository: 36 safety rules were removed one at a time (hash and
   size checks, URL pins, the Run value's quoting, asking before closing, one install at a time);

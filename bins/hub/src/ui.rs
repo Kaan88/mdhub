@@ -133,6 +133,20 @@ pub fn tile(p: &mut Painter, r: Rect, glyph_name: &str, color: Rgb, dim: bool) {
     );
 }
 
+/// An app's tile: its own icon, or the catalog's coloured glyph tile when none decodes.
+pub fn app_tile(
+    p: &mut Painter,
+    r: Rect,
+    id: &'static str,
+    glyph_name: &str,
+    color: Rgb,
+    dim: bool,
+) {
+    if !crate::appicon::draw(p, r, id, dim) {
+        tile(p, r, glyph_name, color, dim);
+    }
+}
+
 pub fn btn_w(p: &mut Painter, label: &str) -> f32 {
     (p.measure(Face::Semibold, 12.5, label) + 26.0).round()
 }

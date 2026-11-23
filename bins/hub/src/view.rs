@@ -641,7 +641,7 @@ fn row(
     let cy = rr.cy();
     // The app.
     let tile = Rect::new(rr.x + 14.0, cy - 16.0, 32.0, 32.0);
-    ui::tile(p, tile, a.glyph, a.tile, false);
+    ui::app_tile(p, tile, a.id, a.glyph, a.tile, false);
     let nx = tile.right() + 12.0;
     let nw = p.text(
         Face::Semibold,

@@ -111,6 +111,15 @@ status and one action; small tiles an icon, a name and one word), the pane under
 new" and the details of the release) and the status bar, and returns every hit rect. Drawn with
 `mdshared-ui` (frameless title, buttons, theme `LIGHT`/`DARK`). Every number is a constant.
 
+`appicon.rs`: each catalog app's own icon (`assets/apps/<id>.png`, 128 px, `include_bytes!`).
+`ui::app_tile` calls `appicon::draw`, which decodes the PNG on the first draw that needs it
+(`decode_png_rgba`), scales it to the tile's side in device px (area average with alpha
+weighting when shrinking, bilinear when growing) into a cache keyed by (app, side), and blends it
+pixel by pixel with `Painter::fill_dev`, so the painter's clip holds. `dim` (not installed)
+fades it and pulls it to grey. A PNG that does not decode returns `false` and `ui::tile` draws
+the catalog's colour and glyph; the title bar's own mark still uses the glyph tile. The badges are
+drawn over the icon as before.
+
 ## bins/hub: demo.rs, shot.rs
 `hub --shot out.png [--size WxH] [--scale N] [--light|--dark] [--view list|large|small] [--demo
 NAME]` renders a `Vm` with no window and no read of this PC. `demo.rs` builds the made-up Vms
