@@ -1,6 +1,7 @@
 //! The Hub window: the title row, the command bar, the list of apps (or the grid of tiles), the
 //! pane under it for the selected app, an optional offer bar, and the status bar. `draw` paints a
 //! `Vm` and returns the `Layout` of everything a pointer can hit. Every number is a constant.
+use crate::changelog;
 use crate::grid;
 use crate::panes;
 use crate::ui::{self, amber, blue, green, red};
@@ -168,6 +169,20 @@ pub fn draw_scrolled(
     vm: &Vm,
     scroll: f32,
 ) -> Layout {
+    draw_full(p, pal, w, h, vm, scroll, 0.0)
+}
+
+/// Draws the window: the list scrolled by `scroll`, or, when the release notes view is open, that
+/// view with its text scrolled by `notes_scroll` (both clamped).
+pub fn draw_full(
+    p: &mut Painter,
+    pal: &Palette,
+    w: f32,
+    h: f32,
+    vm: &Vm,
+    scroll: f32,
+    notes_scroll: f32,
+) -> Layout {
     let (w, h) = (
         if w.is_finite() { w.max(0.0) } else { 0.0 },
         if h.is_finite() { h.max(0.0) } else { 0.0 },
@@ -182,7 +197,9 @@ pub fn draw_scrolled(
         0.0
     };
     title(p, pal, w, &mut lay);
-    command_bar(p, pal, w, vm, &mut lay);
+    if vm.notes.is_none() {
+        command_bar(p, pal, w, vm, &mut lay);
+    }
     if let Some(b) = &vm.banner {
         let r = Rect::new(0.0, TITLE_H + BAR_H, w, BANNER_H);
         let hits = draw_offer_bar(
@@ -205,13 +222,27 @@ pub fn draw_scrolled(
             }
         }
     }
-    match vm.view {
-        _ if vm.apps.is_empty() => empty(p, pal, geo.list),
-        View::List => list(p, pal, geo.list, vm, scroll, &mut lay),
-        _ => grid::draw(p, pal, geo.list, vm, scroll, &mut lay),
-    }
-    if geo.pane.h > 0.0 {
-        panes::draw(p, pal, geo.pane, vm);
+    if let Some(n) = &vm.notes {
+        // The release notes take the whole content area: no list, no pane.
+        let top = TITLE_H + if vm.banner.is_some() { BANNER_H } else { 0.0 };
+        let bottom = geo.status_y.max(top);
+        changelog::draw_page(
+            p,
+            pal,
+            Rect::new(0.0, top, w, bottom - top),
+            n,
+            notes_scroll,
+            &mut lay,
+        );
+    } else {
+        match vm.view {
+            _ if vm.apps.is_empty() => empty(p, pal, geo.list),
+            View::List => list(p, pal, geo.list, vm, scroll, &mut lay),
+            _ => grid::draw(p, pal, geo.list, vm, scroll, &mut lay),
+        }
+        if geo.pane.h > 0.0 {
+            panes::draw(p, pal, geo.pane, vm, &mut lay);
+        }
     }
     status_bar(
         p,

@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 /// A file bigger than this is not read (it is not ours).
 const MAX_INI: u64 = 1 << 20;
 const MAX_MANIFEST: u64 = 1 << 20;
+/// A cached notes file bigger than this is not read (the notes are fetched with a 64 KiB cap).
+const MAX_NOTES_FILE: u64 = 1 << 18;
 
 /// What Hub recorded about an install it made or adopted.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -368,6 +370,56 @@ impl Store {
             let _ = std::fs::create_dir_all(d);
         }
         let _ = write_bytes_atomic(&p, bytes);
+    }
+
+    /// The full release notes of `id`'s `version`, as they arrived (raw bytes: the reader cleans
+    /// them again), so reopening them needs no network. `<dir>/notes/<id>-<version>.md`.
+    pub fn cached_notes(&self, id: &str, version: &str) -> Option<Vec<u8>> {
+        let p = self.notes_path(id, version)?;
+        match std::fs::metadata(&p) {
+            Ok(m) if m.len() <= MAX_NOTES_FILE => std::fs::read(&p).ok(),
+            _ => None,
+        }
+    }
+
+    /// Keeps the notes of one version; the notes of the app's other versions are removed, so the
+    /// folder holds at most one file per app.
+    pub fn set_cached_notes(&self, id: &str, version: &str, bytes: &[u8]) {
+        let Some(p) = self.notes_path(id, version) else {
+            return;
+        };
+        if bytes.len() as u64 > MAX_NOTES_FILE {
+            return;
+        }
+        let Some(d) = p.parent() else { return };
+        let _ = std::fs::create_dir_all(d);
+        if write_bytes_atomic(&p, bytes).is_err() {
+            return;
+        }
+        let keep = p.file_name().map(|n| n.to_os_string());
+        let prefix = format!("{}-", plain(id));
+        if let Ok(rd) = std::fs::read_dir(d) {
+            for e in rd.flatten() {
+                let name = e.file_name();
+                if Some(&name) != keep.as_ref()
+                    && name.to_string_lossy().starts_with(&prefix)
+                    && name.to_string_lossy().ends_with(".md")
+                {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+    }
+
+    fn notes_path(&self, id: &str, version: &str) -> Option<PathBuf> {
+        if !id_ok(id) || version.is_empty() || version.len() > 64 {
+            return None;
+        }
+        Some(
+            self.dir
+                .join("notes")
+                .join(format!("{}-{}.md", plain(id), plain(version))),
+        )
     }
 
     // ---- folders ----
@@ -895,5 +947,51 @@ autostart=Yes
         s.set_notified("");
         assert_eq!(s.notified(), "");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn notes_are_kept_by_app_and_version_one_file_per_app_and_refuse_odd_names() {
+        let s = Store::at(scratch("notes"));
+        assert_eq!(s.cached_notes("mdedit", "1.2.1"), None);
+        s.set_cached_notes("mdedit", "1.2.1", b"# one\n\xff");
+        s.set_cached_notes("mdview", "1.0.0", b"view");
+        assert_eq!(
+            s.cached_notes("mdedit", "1.2.1").as_deref(),
+            Some(&b"# one\n\xff"[..])
+        );
+        assert_eq!(s.cached_notes("mdedit", "1.2.2"), None);
+        assert_eq!(
+            s.cached_notes("mdview", "1.0.0").as_deref(),
+            Some(&b"view"[..])
+        );
+        // A newer version replaces the older one of the same app only.
+        s.set_cached_notes("mdedit", "1.2.2", b"two");
+        assert_eq!(s.cached_notes("mdedit", "1.2.1"), None);
+        assert_eq!(
+            s.cached_notes("mdedit", "1.2.2").as_deref(),
+            Some(&b"two"[..])
+        );
+        assert!(s.cached_notes("mdview", "1.0.0").is_some());
+        // Names that could leave the folder write and read nothing.
+        for (id, v) in [
+            (r"..\evil", "1"),
+            ("a/b", "1"),
+            ("", "1"),
+            ("mdedit", ""),
+            ("mdedit", &"9".repeat(65)),
+        ] {
+            s.set_cached_notes(id, v, b"x");
+            assert_eq!(s.cached_notes(id, v), None, "{id} {v}");
+        }
+        let v = s.cached_notes("mdedit", "../../x");
+        assert_eq!(v, None);
+        // Too big to be ours: not read, not written.
+        s.set_cached_notes(
+            "mdedit",
+            "3.0.0",
+            &vec![b'a'; (MAX_NOTES_FILE + 1) as usize],
+        );
+        assert_eq!(s.cached_notes("mdedit", "3.0.0"), None);
+        let _ = std::fs::remove_dir_all(&s.dir);
     }
 }

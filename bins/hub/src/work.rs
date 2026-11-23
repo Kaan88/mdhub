@@ -71,6 +71,33 @@ pub fn spawn_rollback(
     })
 }
 
+/// The full release notes of `version`: one GET of the release's notes file, kept in the cache
+/// when it arrives. Posts `Event::Notes`. The engine starts it only when the notes view is opened
+/// and the disk had no copy.
+pub fn spawn_notes(
+    post: Arc<dyn Post>,
+    t: Arc<dyn Transport>,
+    store: Store,
+    app: &'static CatalogApp,
+    version: String,
+    file: String,
+) -> Result<(), String> {
+    spawn("hub-notes", move || {
+        let result = match hub_core::notes::fetch(app, &version, &file, &*t) {
+            Ok((raw, text)) => {
+                store.set_cached_notes(app.id, &version, &raw);
+                Ok(text)
+            }
+            Err(e) => Err(e),
+        };
+        post.post(Event::Notes {
+            id: app.id,
+            version,
+            result,
+        });
+    })
+}
+
 /// What a check does about Hub's own update: the exe that would be replaced, and the version
 /// already staged beside it (not downloaded again).
 pub struct HubJob {

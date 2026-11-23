@@ -66,6 +66,38 @@ pub struct Vm {
     /// A picture of the settings card over the window (`--demo settings-...`): its rows and the
     /// category shown. The real window keeps a form of its own, so this is None there.
     pub settings: Option<(Vec<mdshared_ui::settings::Row>, usize)>,
+    /// The release notes view: when it is Some, it takes the content area (the list and the pane
+    /// are not drawn) until it is closed.
+    pub notes: Option<NotesVm>,
+}
+
+/// Where the full release notes of the version Hub knows about are.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NotesState {
+    /// The notes file is being fetched.
+    Loading,
+    /// The notes, cleaned Markdown.
+    Loaded(String),
+    /// The fetch failed: the reason. "Try again" asks once more.
+    Failed(String),
+    /// The release names no notes file: the one line is all there is.
+    NoFile,
+}
+
+/// The release notes view of one app.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NotesVm {
+    pub id: &'static str,
+    pub name: &'static str,
+    /// The version the notes belong to (the latest Hub knows about).
+    pub version: String,
+    /// The installed version text, or None.
+    pub installed: Option<String>,
+    /// "21 Nov" or empty.
+    pub date: String,
+    /// hub.txt `notes`: always there when the release has any.
+    pub one_liner: String,
+    pub state: NotesState,
 }
 
 /// What a row or tile's button does.
@@ -102,6 +134,14 @@ pub enum Hit {
     Menu(usize),
     BannerYes,
     BannerNo,
+    /// The pane's "Release notes" link of row `i`.
+    Notes(usize),
+    /// The notes view's back arrow.
+    NotesBack,
+    /// The notes view's "Try again".
+    NotesRetry,
+    /// The notes view's "GitHub": the release page in the browser.
+    NotesPage,
     None,
 }
 
@@ -111,6 +151,10 @@ pub struct Layout {
     pub hits: Vec<(Rect, Hit)>,
     /// Content height of the scrolling list, so the shell can scroll it.
     pub list_content_h: f32,
+    /// The notes view: how far its text can scroll and how tall its window on it is (both 0 when
+    /// the view is not open), so the shell can clamp the wheel and move by pages.
+    pub notes_max_scroll: f32,
+    pub notes_view_h: f32,
 }
 
 impl Layout {

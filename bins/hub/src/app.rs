@@ -96,6 +96,13 @@ struct App {
     vm: Vm,
     scroll: f32,
     max_scroll: f32,
+    /// The release notes view's own scroll (the list keeps its own while the view is open), how
+    /// far it can go and how tall its window on the text is (from the last frame), and which
+    /// notes it was for (a new one starts at the top).
+    nscroll: f32,
+    nmax: f32,
+    nview: f32,
+    nsig: Option<(&'static str, String, u8)>,
     mouse: (f32, f32),
     mods: ModifiersState,
     popup: Option<Popup>,
@@ -161,6 +168,10 @@ fn map_key(ev: &KeyEvent) -> Option<Key> {
             NamedKey::Tab => Some(Key::Tab),
             NamedKey::Backspace => Some(Key::Backspace),
             NamedKey::F5 => Some(Key::F5),
+            NamedKey::PageUp => Some(Key::PageUp),
+            NamedKey::PageDown => Some(Key::PageDown),
+            NamedKey::Home => Some(Key::Home),
+            NamedKey::End => Some(Key::End),
             NamedKey::Space => Some(Key::Char(' ')),
             _ => None,
         },
@@ -263,7 +274,25 @@ impl App {
         let maximized = window.is_maximized();
         let gfx = self.gfx.get_or_insert_with(Gfx::new);
         let mut p = Painter::new(&mut self.bmp, gfx, self.scale);
-        let layout = view::draw_scrolled(&mut p, &pal, lw, lh, &vm, self.scroll);
+        // A different notes view (or the same one with its text arrived) starts at the top.
+        let sig = vm.notes.as_ref().map(|n| {
+            (
+                n.id,
+                n.version.clone(),
+                match n.state {
+                    crate::vm::NotesState::Loaded(_) => 1,
+                    _ => 0,
+                },
+            )
+        });
+        if sig != self.nsig {
+            self.nscroll = 0.0;
+            self.nsig = sig;
+        }
+        let layout = view::draw_full(&mut p, &pal, lw, lh, &vm, self.scroll, self.nscroll);
+        self.nmax = layout.notes_max_scroll;
+        self.nview = layout.notes_view_h;
+        self.nscroll = self.nscroll.clamp(0.0, self.nmax);
         let _ = maximized;
         if let Some(pop) = &self.popup {
             draw_popup(&mut p, &pal, pop);
@@ -573,6 +602,23 @@ impl App {
                 return;
             }
         }
+        if self.vm.notes.is_some() {
+            // The notes view: the keys move the text, Esc or Backspace go back.
+            if let Some(k) = map_key(&ev) {
+                if let Some(nav) = crate::glue::notes_nav(k) {
+                    let next = crate::changelog::scrolled(nav, self.nscroll, self.nmax, self.nview);
+                    if next != self.nscroll {
+                        self.nscroll = next;
+                        self.dirty = true;
+                    }
+                    return;
+                }
+                if k == Key::Backspace && !ev.repeat {
+                    self.apply(Cmd::NotesClose);
+                    return;
+                }
+            }
+        }
         let cols = match self.vm.view {
             View::List => 1,
             v => crate::grid::geometry(v, self.logical().0).0,
@@ -739,6 +785,14 @@ impl ApplicationHandler<Event> for App {
                 if let Some(f) = &mut self.settings {
                     // The card scrolls towards its end when the wheel turns down.
                     if f.wheel(self.mouse.0, self.mouse.1, -dy) {
+                        self.dirty = true;
+                    }
+                    return;
+                }
+                if self.vm.notes.is_some() {
+                    let next = (self.nscroll - dy).clamp(0.0, self.nmax);
+                    if next != self.nscroll {
+                        self.nscroll = next;
                         self.dirty = true;
                     }
                     return;
@@ -930,6 +984,10 @@ impl App {
         self.layout = Layout::default();
         self.scroll = 0.0;
         self.max_scroll = 0.0;
+        self.nscroll = 0.0;
+        self.nmax = 0.0;
+        self.nview = 0.0;
+        self.nsig = None;
         self.mouse = (-1.0, -1.0);
         self.cursor = CursorIcon::Default;
         self.shown = false;
@@ -1162,6 +1220,10 @@ pub fn run(mut args: Args, started: Instant) -> i32 {
         vm,
         scroll: 0.0,
         max_scroll: 0.0,
+        nscroll: 0.0,
+        nmax: 0.0,
+        nview: 0.0,
+        nsig: None,
         mouse: (-1.0, -1.0),
         mods: ModifiersState::empty(),
         popup: None,

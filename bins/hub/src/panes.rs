@@ -3,7 +3,7 @@
 //! left, the details of the release on the right.
 use crate::ui::{self, red};
 use crate::view::PANE_TAB_H;
-use crate::vm::Vm;
+use crate::vm::{Hit, Layout, Vm};
 use hub_core::model::Row;
 use mdshared_ui::gfx::{Face, Painter, Rect, Rgb, mix};
 use mdshared_ui::theme::Palette;
@@ -20,7 +20,7 @@ pub fn tab_label(row: &Row) -> &'static str {
     }
 }
 
-pub fn draw(p: &mut Painter, pal: &Palette, r: Rect, vm: &Vm) {
+pub fn draw(p: &mut Painter, pal: &Palette, r: Rect, vm: &Vm, lay: &mut Layout) {
     p.fill(r, pal.pane);
     let px = p.px().max(1.0);
     p.fill(Rect::new(r.x, r.y, r.w, px), pal.line);
@@ -41,6 +41,30 @@ pub fn draw(p: &mut Painter, pal: &Palette, r: Rect, vm: &Vm) {
         Rect::new(r.x, r.y + PANE_TAB_H, r.w, px),
         mix(pal.pane, pal.line, 0.7),
     );
+    // The link to the full notes, beside the tab: only for a release Hub knows about.
+    if a.latest.is_some() {
+        let lx = r.x + 16.0 + wd + 28.0;
+        let lw = p.text(
+            Face::Ui,
+            12.5,
+            lx,
+            cy,
+            "Release notes",
+            ui::blue(pal),
+            200.0,
+        );
+        p.icon(
+            mdshared_ui::glyph::RIGHT,
+            12.0,
+            lx + lw + 9.0,
+            cy,
+            ui::blue(pal),
+        );
+        lay.hits.push((
+            Rect::new(lx - 6.0, r.y + 2.0, lw + 34.0, PANE_TAB_H - 4.0),
+            Hit::Notes(vm.sel),
+        ));
+    }
     let head = match (&a.installed, &a.latest) {
         (Some(i), Some(l)) if i != l => format!("{}  {} \u{2192} {}", a.name, i, l),
         (Some(i), _) => format!("{}  {}", a.name, i),

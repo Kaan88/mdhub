@@ -3,7 +3,7 @@
 //! the work on worker threads one install at a time, and builds the `Vm` the drawing code reads.
 //! Nothing here touches a window, so every behaviour is tested without one. Nothing here asks the
 //! network anything until a check is asked for (the first one is scheduled, never run at start).
-use crate::vm::{Act, AppVm, Banner, Hit, View, Vm};
+use crate::vm::{Act, AppVm, Banner, Hit, NotesState, NotesVm, View, Vm};
 use crate::work;
 use hub_core::catalog::{CATALOG, CatalogApp};
 use hub_core::check;
@@ -45,6 +45,13 @@ pub enum Event {
     Tray(crate::tray::TrayCmd),
     /// Hub's own update, looked at and downloaded on the check's worker.
     Hub(HubEvent),
+    /// The full release notes of `version` of `id` were fetched (cleaned text) or could not be
+    /// (the reason). Asked for only when the notes view is opened.
+    Notes {
+        id: &'static str,
+        version: String,
+        result: Result<String, String>,
+    },
 }
 
 /// What the check worker found out about Hub's own update.
@@ -478,6 +485,16 @@ pub enum Cmd {
     HubRestart,
     /// "Later" on Hub's own bar.
     HubLater,
+    /// The release notes view of this app (the pane's link, the menu's item).
+    OpenNotes(&'static str),
+    /// The key for the release notes of the selected app.
+    NotesOfSelected,
+    /// Back from the notes view.
+    NotesClose,
+    /// "Try again" in the notes view.
+    NotesRetry,
+    /// "Release page" in the notes view: the release on GitHub, in the browser.
+    NotesPage,
     FocusFilter,
     FilterChar(char),
     FilterBack,
@@ -492,6 +509,7 @@ pub enum Cmd {
 pub enum MenuItem {
     Open,
     ShowInFolder,
+    ReleaseNotes,
     SkipVersion,
     RollBack,
     GitHub,
@@ -520,6 +538,10 @@ pub fn command(hit: Hit, vm: &Vm) -> Option<Cmd> {
         Hit::Row(i) => id(i).map(|_| Cmd::Select(i)),
         Hit::Action(i, act) => id(i).map(|id| act_cmd(id, act)),
         Hit::Menu(i) => id(i).map(|_| Cmd::OpenMenu(i)),
+        Hit::Notes(i) => id(i).map(Cmd::OpenNotes),
+        Hit::NotesBack => Some(Cmd::NotesClose),
+        Hit::NotesRetry => Some(Cmd::NotesRetry),
+        Hit::NotesPage => Some(Cmd::NotesPage),
         // The bar over the list is an app's question or Hub's own "Restart now"; which one it is
         // decides the command, so a stale or doubled click never answers the other bar.
         Hit::BannerYes => Some(match &vm.banner {
@@ -546,6 +568,10 @@ pub enum Key {
     Tab,
     Backspace,
     F5,
+    PageUp,
+    PageDown,
+    Home,
+    End,
     Char(char),
 }
 
@@ -581,6 +607,21 @@ pub fn key_command(
         Key::Char('f') if ctrl => Some(Cmd::FocusFilter),
         Key::Char('r') if ctrl => Some(Cmd::CheckNow),
         Key::Char('/') if !ctrl => Some(Cmd::FocusFilter),
+        Key::Char('n') if !ctrl => Some(Cmd::NotesOfSelected),
+        _ => None,
+    }
+}
+
+/// What a key does to the notes view's text: the arrows, pages, Home and End move it.
+pub fn notes_nav(key: Key) -> Option<crate::changelog::Nav> {
+    use crate::changelog::Nav;
+    match key {
+        Key::Up => Some(Nav::LineUp),
+        Key::Down => Some(Nav::LineDown),
+        Key::PageUp => Some(Nav::PageUp),
+        Key::PageDown | Key::Char(' ') => Some(Nav::PageDown),
+        Key::Home => Some(Nav::Home),
+        Key::End => Some(Nav::End),
         _ => None,
     }
 }
@@ -669,10 +710,23 @@ pub struct Engine {
     started: Instant,
     own: Own,
     tell: Tell,
+    /// The release notes view, when it is open (never at start).
+    notes: Option<NotesOpen>,
     run_key: RunKey,
     /// "Start with Windows" as the registry says, read when first wanted (never at start).
     autostart: Cell<Option<bool>>,
     tray_on: bool,
+}
+
+/// The release notes view that is open: which version's notes, and how far they have come.
+struct NotesOpen {
+    id: &'static str,
+    version: String,
+    date: String,
+    one_liner: String,
+    /// The manifest's `notes.file`, None when the release has none.
+    file: Option<String>,
+    state: NotesState,
 }
 
 /// Hub's own update: where it stands, and what is waiting to be done with it.
@@ -783,6 +837,7 @@ impl Engine {
             first: d.first_check,
             started: Instant::now(),
             own: Own::new(d.hub_exe),
+            notes: None,
             tell: Tell {
                 mem: Memory::from_line(&notified),
                 msg: None,
@@ -833,6 +888,7 @@ impl Engine {
             first: None,
             started: Instant::now(),
             own: Own::new(None),
+            notes: None,
             tell: Tell {
                 mem: Memory::new(),
                 msg: None,
@@ -985,6 +1041,11 @@ impl Engine {
                 _ => env!("CARGO_PKG_VERSION").to_string(),
             },
             settings: None,
+            notes: self
+                .notes
+                .as_ref()
+                .map(|n| self.notes_vm(n, now))
+                .or_else(|| self.fixed.as_ref().and_then(|v| v.notes.clone())),
             busy: busy.or_else(|| self.fixed.as_ref().and_then(|v| v.busy.clone())),
             updates,
             filter: self.filter.clone(),
@@ -1020,6 +1081,11 @@ impl Engine {
         let mut v = vec![
             (MenuItem::Open, "Open", installed),
             (MenuItem::ShowInFolder, "Show in folder", installed),
+            (
+                MenuItem::ReleaseNotes,
+                "Release notes",
+                matches!(slot.latest, Latest::Found(_)),
+            ),
             (MenuItem::SkipVersion, "Skip this version", skippable),
         ];
         if self.can_roll_back(slot) {
@@ -1148,7 +1214,11 @@ impl Engine {
                 changed
             }
             Cmd::Esc => {
-                if self.banner.is_some() {
+                if self.notes.is_some() {
+                    // Back to the list: the selection is where it was.
+                    self.notes = None;
+                    true
+                } else if self.banner.is_some() {
                     // The same as No: the open apps still waiting are not asked about later.
                     self.pending_close.clear();
                     self.banner = None;
@@ -1203,6 +1273,17 @@ impl Engine {
                     self.enqueue(id, JobKind::Install)
                 }
             }
+            Cmd::OpenNotes(id) => self.open_notes(id),
+            Cmd::NotesOfSelected => {
+                let ids = self.visible_ids(now);
+                match ids.get(self.sel.min(ids.len().saturating_sub(1))).copied() {
+                    Some(id) if self.notes.is_none() => self.open_notes(id),
+                    _ => false,
+                }
+            }
+            Cmd::NotesClose => self.notes.take().is_some(),
+            Cmd::NotesRetry => self.retry_notes(),
+            Cmd::NotesPage => self.notes_page(),
             Cmd::Adopt(id) => self.adopt(id),
             Cmd::Cancel(id) => self.cancel(id),
             Cmd::CancelAll => {
@@ -1513,6 +1594,129 @@ impl Engine {
         }
     }
 
+    // ---- the release notes view ----
+
+    /// Opens the notes of the release Hub knows about. The one line is already there; the full
+    /// notes come from the disk when they were fetched before, else from one GET of the release's
+    /// notes file, on a worker. Nothing else asks for them: not start, not idle, not a check.
+    fn open_notes(&mut self, id: &'static str) -> bool {
+        let Some(slot) = self.slot(id) else {
+            return false;
+        };
+        let Latest::Found(m) = &slot.latest else {
+            self.notice = Some(format!(
+                "Hub has no release information for {} yet",
+                slot.app.name
+            ));
+            return true;
+        };
+        let version = m.version.to_string();
+        let file = m.notes_file.clone();
+        let state = match &file {
+            None => NotesState::NoFile,
+            Some(_) => match self
+                .store
+                .cached_notes(id, &version)
+                .map(|b| hub_core::notes::clean(&b))
+                .filter(|t| !t.trim().is_empty())
+            {
+                Some(text) => NotesState::Loaded(text),
+                None => NotesState::Loading,
+            },
+        };
+        self.notes = Some(NotesOpen {
+            id,
+            version,
+            date: fmt_date(&m.date),
+            one_liner: m.notes.clone(),
+            file,
+            state,
+        });
+        self.fetch_notes();
+        true
+    }
+
+    /// Starts the fetch when the open view is waiting for one.
+    fn fetch_notes(&mut self) {
+        let Some(n) = self.notes.as_mut() else {
+            return;
+        };
+        let (NotesState::Loading, Some(file)) = (&n.state, n.file.clone()) else {
+            return;
+        };
+        let (id, version) = (n.id, n.version.clone());
+        let Some(app) = CATALOG.iter().find(|a| a.id == id) else {
+            return;
+        };
+        if let Err(e) = work::spawn_notes(
+            self.post.clone(),
+            self.transport.clone(),
+            self.store.clone(),
+            app,
+            version,
+            file,
+        ) && let Some(n) = self.notes.as_mut()
+        {
+            n.state = NotesState::Failed(format!("Could not start the download: {e}"));
+        }
+    }
+
+    fn retry_notes(&mut self) -> bool {
+        match self.notes.as_mut() {
+            Some(n) if matches!(n.state, NotesState::Failed(_)) && n.file.is_some() => {
+                n.state = NotesState::Loading;
+                self.fetch_notes();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn notes_page(&mut self) -> bool {
+        if let Some(n) = &self.notes
+            && let Some(app) = CATALOG.iter().find(|a| a.id == n.id)
+            && let Some(url) = hub_core::notes::page_url(app, &n.version)
+        {
+            self.shell.open_url(&url);
+        }
+        false
+    }
+
+    fn notes_vm(&self, n: &NotesOpen, now: u64) -> NotesVm {
+        let (name, installed) = match self.slot(n.id) {
+            Some(s) => (s.app.name, app_vm(s, now).installed),
+            None => (n.id, None),
+        };
+        NotesVm {
+            id: n.id,
+            name,
+            version: n.version.clone(),
+            installed,
+            date: n.date.clone(),
+            one_liner: n.one_liner.clone(),
+            state: n.state.clone(),
+        }
+    }
+
+    fn handle_notes(
+        &mut self,
+        id: &'static str,
+        version: String,
+        result: Result<String, String>,
+    ) -> bool {
+        match self.notes.as_mut() {
+            Some(n) if n.id == id && n.version == version && n.state == NotesState::Loading => {
+                n.state = match result {
+                    Ok(t) => NotesState::Loaded(t),
+                    Err(e) => NotesState::Failed(e),
+                };
+                true
+            }
+            // The view was closed, or moved to another app: nothing to show it on.
+            _ => false,
+        }
+    }
+
     fn menu_pick(&mut self, id: &'static str, item: MenuItem) -> bool {
         let Some(slot) = self.slot(id) else {
             return false;
@@ -1531,6 +1735,7 @@ impl Engine {
                     .open_url(&format!("https://github.com/Kaan88/{}", app.repo));
                 false
             }
+            MenuItem::ReleaseNotes => self.open_notes(id),
             MenuItem::SkipVersion => {
                 let v = match &slot.latest {
                     Latest::Found(m) => m.version.to_string(),
@@ -1911,6 +2116,11 @@ impl Engine {
         match ev {
             Event::Raise | Event::Tray(_) => false,
             Event::Hub(h) => self.handle_hub(h),
+            Event::Notes {
+                id,
+                version,
+                result,
+            } => self.handle_notes(id, version, result),
             Event::Progress { id, p } => {
                 let phase = match p {
                     Progress::Downloading { done, total, .. } => Phase::Downloading {

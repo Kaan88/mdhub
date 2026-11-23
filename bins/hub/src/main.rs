@@ -16,6 +16,7 @@ macro_rules! eprintln {
 #[cfg(windows)]
 mod app;
 mod appicon;
+mod changelog;
 mod cli;
 mod demo;
 mod glue;
@@ -58,6 +59,8 @@ fn main() {
 mod e2e_tests;
 #[cfg(test)]
 mod glue_tests;
+#[cfg(test)]
+mod notes_tests;
 #[cfg(test)]
 mod own_tests;
 #[cfg(test)]

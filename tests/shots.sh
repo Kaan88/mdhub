@@ -22,7 +22,7 @@ exe="$t/release/hub.exe"
 [ -x "$exe" ] || exe="$t/release/hub"
 [ -x "$exe" ] || { echo "shots: no release build at $t/release (cargo build --release -p hub)" >&2; exit 1; }
 
-DEMOS="main first-run updating failed done noinfo running banner all empty settings-general settings-updates settings-about"
+DEMOS="main first-run updating failed done noinfo running banner all empty settings-general settings-updates settings-about notes notes-loading notes-failed notes-nofile notes-long"
 VIEWS="list large small"
 THEMES="light dark"
 SIZES="1280x800 860x600"
@@ -42,7 +42,10 @@ fi
 
 n=0
 for demo in $DEMOS; do
-    for view in $VIEWS; do
+    # The notes view takes the whole content area: the list view makes no difference to it.
+    views="$VIEWS"
+    case "$demo" in notes*) views="list" ;; esac
+    for view in $views; do
         for theme in $THEMES; do
             for size in $SIZES; do
                 # The scale is pinned, so the system's display scale cannot change the pictures.

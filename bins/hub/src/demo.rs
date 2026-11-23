@@ -1,7 +1,7 @@
 //! Fake Vm states for the pictures and the tests: `hub --shot out.png --demo NAME`.
 //! Everything here is made up; nothing reads this PC.
 use crate::settings;
-use crate::vm::{AppVm, Banner, View, Vm};
+use crate::vm::{AppVm, Banner, NotesState, NotesVm, View, Vm};
 use hub_core::catalog::{CATALOG, CatalogApp};
 use hub_core::model::Row;
 
@@ -19,7 +19,74 @@ pub const NAMES: &[&str] = &[
     "settings-general",
     "settings-updates",
     "settings-about",
+    "notes",
+    "notes-loading",
+    "notes-failed",
+    "notes-nofile",
+    "notes-long",
 ];
+
+/// What a release notes file of mdedit 1.2.1 could look like: every construct the page reads.
+const SAMPLE_NOTES: &str = "# mdedit 1.2.1
+
+An option to leave out tabs you barely looked at, and a **tidier AI menu**. This release is mostly *small* things that add up, and one fix people asked for.
+
+## What is new
+
+- Close tabs you barely looked at: **Settings > Tabs > Skip quick looks**.
+- The AI menu lists *saved prompts* first, then the commands. A long prompt's name no longer runs under its `Modify` button.
+- Find in files remembers the last folder.
+  - It also remembers the file filter, such as `*.rs`.
+  - Clear both with the [reset link](https://github.com/Kaan88/markdown-editor-rs).
+
+## Fixed
+
+1. Opening a file with a very long first line no longer takes a second to draw.
+2. Undo after a replace in all tabs puts every tab back.
+3. The status bar no longer flickers while a large file loads.
+
+### Settings that changed
+
+The default of `tabs.skip_quick` is now off. To turn it on from a settings file:
+
+```ini
+[tabs]
+skip_quick = 1
+```
+
+---
+
+Thanks to everyone who sent a report. Full history: github.com/Kaan88/markdown-editor-rs/releases
+";
+
+fn long_notes() -> String {
+    let mut t = String::from(SAMPLE_NOTES);
+    for (v, d) in [
+        ("1.2.0", "14 Nov"),
+        ("1.1.4", "02 Nov"),
+        ("1.1.3", "28 Oct"),
+    ] {
+        t.push_str(&format!(
+            "
+## mdedit {v}  ({d})
+
+"
+        ));
+        for i in 1..=6 {
+            t.push_str(&format!(
+                "- Item {i} of {v}: the editor now keeps the caret column when a line is moved, and a replace across files no longer asks twice about files that did not change.
+"
+            ));
+        }
+        t.push_str("
+A paragraph about this release, with `inline code`, **bold words** and *soft words*, long enough to wrap onto a second line in the narrow window.
+");
+    }
+    t.push_str("
+https://github.com/Kaan88/markdown-editor-rs/releases/download/v1.2.1/mdedit-1.2.1-windows-x86_64-setup-with-a-very-long-name.exe
+");
+    t
+}
 
 fn cat(id: &str) -> &'static CatalogApp {
     CATALOG.iter().find(|a| a.id == id).unwrap_or(&CATALOG[0])
@@ -331,6 +398,30 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
             vm(apps, 2, view)
         }
         "empty" => vm(Vec::new(), 0, view),
+        // The release notes view of mdedit (1.2.0 installed, 1.2.1 the latest): loaded, still
+        // loading, failed (the one line stays), a release with no notes file, and a long one.
+        "notes" | "notes-loading" | "notes-failed" | "notes-nofile" | "notes-long" => {
+            let mut v = build("main", view)?;
+            let one = v.apps.first().map(|a| a.notes.clone()).unwrap_or_default();
+            v.notes = Some(NotesVm {
+                id: "mdedit",
+                name: "mdedit",
+                version: "1.2.1".into(),
+                installed: Some("1.2.0".into()),
+                date: "21 Nov".into(),
+                one_liner: one,
+                state: match name {
+                    "notes-loading" => NotesState::Loading,
+                    "notes-failed" => NotesState::Failed(
+                        "Could not download the notes: connection timed out".into(),
+                    ),
+                    "notes-nofile" => NotesState::NoFile,
+                    "notes-long" => NotesState::Loaded(long_notes()),
+                    _ => NotesState::Loaded(SAMPLE_NOTES.to_string()),
+                },
+            });
+            v
+        }
         _ => return None,
     })
 }

@@ -129,7 +129,7 @@ fn reserved_device(v: &str) -> bool {
 
 /// A plain file name: letters, digits, `.`, `_`, `-`; not hidden; no trailing `.` (Win32 strips
 /// it, so the file written would not be the one named); not a device name; at most 128 bytes.
-fn valid_name(v: &str) -> bool {
+pub fn valid_name(v: &str) -> bool {
     !v.is_empty()
         && v.len() <= MAX_NAME
         && !v.starts_with('.')
