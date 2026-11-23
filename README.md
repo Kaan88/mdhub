@@ -10,7 +10,7 @@ crates/hub-core   headless and tested: catalog, hub.txt parser, detection, check
 bins/hub          the window (winit + softbuffer, every control drawn) and `hub --shot`
 tools/            write-hub-txt.ps1 (what each app's release workflow calls), samples/
 tests/            shots.sh, shots-check.sh
-docs/             STATE, DECISIONS, DESIGN, CODE, APP-CHANGES, INTERFACES, RELEASE
+docs/             STATE, DECISIONS, DESIGN, CODE, COMPLIANCE, APP-CHANGES, INTERFACES, RELEASE
 ```
 
 How it works, in four lines: each app's release carries one `hub.txt`; Hub reads
@@ -28,3 +28,6 @@ cargo test --release --workspace
 ```
 
 Start here: `CLAUDE.md`, then `docs/STATE.md`.
+
+**Working on another app for Hub?** Read [docs/COMPLIANCE.md](docs/COMPLIANCE.md): what a release, the
+installer and the exe must do so Hub can detect, check and update it.

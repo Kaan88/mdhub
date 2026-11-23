@@ -20,6 +20,8 @@ Its sisters are `Kaan88/markdown-editor-rs` (mdedit; on this PC
    - `docs/INTERFACES.md`: the contract between the modules (as built).
    - `docs/DESIGN.md`: how each module works, one section per module.
    - `docs/CODE.md`: where the code is, how to build, test, take shots, measure.
+   - `docs/COMPLIANCE.md`: what an app must do to work with Hub (the contract other repositories'
+     agents read; keep it true when the parser, the catalog or the install rules change).
    - `docs/APP-CHANGES.md`: what the four apps must change for Hub (proposals, not applied).
    - `docs/RELEASE.md`: how a release will be cut. None has been.
 
