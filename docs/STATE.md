@@ -4,9 +4,10 @@ Rewritten, never appended to. What is true now; `git log` is the story.
 
 ## Released
 
-Nothing. No release, no tag (`docs/RELEASE.md`). The repository `Kaan88/mdhub` exists and `main`
-was pushed there up to the installer work; the icon and the review fixes after it are local
-only. Whether `ci` has run there was not looked at. The owner has not asked for a release.
+v0.1.0 (2026-11-22, `Kaan88/mdhub`: `Hub-Setup-0.1.0.exe`, `hub.exe`, `hub-update.txt`, `hub.txt`; the
+release workflow and `ci` passed on GitHub). 0.1.1 is being cut: the apps' own icons, the release
+notes page and the review fixes. The installer and a self-update from a real release have not been
+run by hand.
 
 ## On `main`, committed
 
