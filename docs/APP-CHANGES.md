@@ -1,6 +1,6 @@
 # What each app must change for Hub
 
-For the owner to approve, app by app. **Nothing here has been applied**: the four projects were
+For the owner to approve, app by app. **Nothing here has been applied**: the first four projects were
 read (mdedit and mdview from their `main`, Sprawl and Inbound through `gh api`, all read only) and
 their files are as they were. Read 2026-11-22.
 
@@ -309,6 +309,29 @@ does not name: Setup's restart manager closes them, but listing them in the cata
 catalog edit, Hub's side); an unattended silent upgrade re-selects the previous tasks, which the
 Setup's `[Code]` already handles ("A silent upgrade shows no task page"); drafts are invisible to
 `latest` until published, as today.
+
+## Barbican (`Kaan88/barbican`)
+
+Added to the catalog afterwards; read from the Barbican repository's own files, nothing applied
+here. A Rust/Slint mail, calendar, contacts and files client for JMAP (Stalwart) servers. It runs in
+the tray with no required window. **The work is in the Barbican repository, branch `installer-inno`,
+and has not been released**: until a release carries `hub.txt`, Barbican shows "no release
+information" in Hub, never a wrong install. There is no sample in `tools/samples/` because those
+carry GitHub's real sizes and hashes and there is no release to take them from.
+
+| Item | Value |
+|---|---|
+| kind | `setup` (per-user Inno, `%LOCALAPPDATA%\Programs\Barbican`) |
+| exe | `barbican.exe` |
+| uninstall | `{ACE04D99-4564-4E70-9A43-FE47A6A0E3B5}_is1` (the Inno `AppId`) |
+| wait | `barbican.exe` (its updater helper is a hidden PowerShell started from it) |
+| setup, silent, scope | `Barbican-Setup-<v>.exe` (name to be confirmed in the Barbican workflow), `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER`, `user` |
+| `setup_closes_app` | true: the installer stops the running app (`CloseApplications`) |
+
+The release must carry `hub.txt` written with `tools/write-hub-txt.ps1` (`-App barbican -Repo
+barbican`), and the exe a version resource. **Standing down**: Barbican's own updater does **not**
+stand down for Hub yet; that is not built on either side (`docs/COMPLIANCE.md` section 6), so
+until it is, Hub and Barbican's updater could both offer the same update.
 
 ## Days
 

@@ -13,8 +13,9 @@ tray, the balloon and the tray menu seen live. 0.1.1 could not update Inbound or
 
 ## On `main`, committed
 
-- `crates/hub-core`: catalog (five apps, D-030), model, `hub.txt` parser and writer plus the
-  legacy stopgap, Hub's own files, detection, checking, transport, installing, and the tray
+- `crates/hub-core`: catalog (six apps: mdedit, mdview, Sprawl, Inbound, Purge D-030, Barbican
+  D-031; Barbican's release not cut yet), model, `hub.txt` parser and writer plus the legacy
+  stopgap, Hub's own files, detection, checking, transport, installing, and the tray
   work: `autostart` (Run key), `selfupdate` (Hub's own update), `notify` (balloon text and memory).
 - `bins/hub`: the window (`app`, winit + softbuffer, created on demand), its engine (`glue`),
   workers (`work`), `cli`, drawing (`vm view grid panes ui`), `--shot` and `demo`, and the tray
@@ -32,8 +33,9 @@ tray, the balloon and the tray menu seen live. 0.1.1 could not update Inbound or
   in `icon.rs`; `assets/hub.ico` is packed from it by `tools/make-icon.ps1`.
 - The apps' own icons (D-027): list, large and small views draw each app's own icon, one 128 px
   PNG in `assets/apps/<id>.png` (mdedit, mdview from their .ico's 128 frame; Sprawl, Inbound
-  from their 256 px PNG, Purge from its .ico's 256 frame, downscaled), decoded on the first
-  draw, scaled once per size. The catalog `tile`/`glyph` draw only when an icon does not decode.
+  from their 256 px PNG, Purge from its .ico's 256 frame, Barbican's own 128 px; all downscaled
+  where larger), decoded on the first draw, scaled once per size. The catalog `tile`/`glyph` draw
+  only when an icon does not decode.
 - Closing an app (D-025, D-026): the offer bar's yes covers one install; a roll back of an open
   app is not started; a question with no window opens the window.
 - Settings card: start with Windows, tray, notifications, check interval, update Hub.

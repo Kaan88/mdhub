@@ -68,13 +68,15 @@ windows-x86_64.setup.silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 windows-x86_64.setup.scope: machine
 ```
 
-Examples for every catalog app: `tools/samples/<app>/hub.txt` (Purge's is its v0.1.0 release's own
-`hub.txt`). `crates/hub-core/tests/samples.rs` checks that each parses.
+Examples for every catalog app that has a release to take them from: `tools/samples/<app>/hub.txt`
+(Purge's is its v0.1.0 release's own `hub.txt`; Barbican has none until it has a release).
+`crates/hub-core/tests/samples.rs` checks that each one parses, and that the only app without a
+sample is the one it names.
 
 | Key | Rule |
 |---|---|
 | `hub: 1` | First meaningful line. Any other number is refused. |
-| `app` | The catalog id (`mdedit`, `mdview`, `sprawl`, `inbound`, `purge`). Must match. |
+| `app` | The catalog id (`mdedit`, `mdview`, `sprawl`, `inbound`, `purge`, `barbican`). Must match. |
 | `version` | `X.Y.Z` or `X.Y.Z-pre`. Hub compares versions SemVer-style. |
 | `date` | `YYYY-MM-DD`, the release day. |
 | `notes` | One line, at most 1024 **bytes**, no control characters. |
