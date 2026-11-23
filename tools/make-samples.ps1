@@ -43,3 +43,14 @@ $silent = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
     -Wait 'app\DownloadManager.Host.exe', 'app\DownloadManager.Desktop.WinUI.exe', 'app\DownloadManager.NativeHost.exe' -Files @(
         @{ Name = 'InboundSetup-0.9.0.exe'; Role = 'setup'; Size = 72028167; Sha256 = 'cd496332e897774c6fe6a57aefaef6dfd2df0270c929c415b3aa869c863c1ac9'; Silent = "$silent /CURRENTUSER"; Scope = 'user' }
     ) -Out (Join-Path $out 'inbound\hub.txt')
+
+# Purge: for all users like Sprawl (Program Files, PrivilegesRequired=admin), run elevated at the
+# owner's click. Size and SHA-256 of its v0.1.0 (alpha) release, read 2026-11-23; the file equals
+# that release's own hub.txt.
+& $w -App purge -Repo purge -Version 0.1.0 -Date 2026-11-23 `
+    -Notes 'Alpha: first public build. Uninstall, leftover scan, quarantine with undo.' `
+    -NotesFile 'release-notes-0.1.0.md' `
+    -Kind setup -Exe Purge.exe -Uninstall '{7C1B9E64-2D58-4F1A-9B03-6E4C5A8D7F21}_is1' `
+    -Wait 'Purge.exe', 'purge-engine.exe', 'purge-broker.exe' -Files @(
+        @{ Name = 'Purge-Setup-0.1.0.exe'; Role = 'setup'; Size = 43420740; Sha256 = 'ddbeecf68b6b1c251c1d4023e31348c7ccc6cafc2bb03fe013126e7330ee8220'; Silent = $silent; Scope = 'machine' }
+    ) -Out (Join-Path $out 'purge\hub.txt')

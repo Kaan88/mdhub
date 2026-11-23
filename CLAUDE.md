@@ -1,6 +1,6 @@
 # Hub
 
-A launcher and updater for the owner's apps: mdedit, mdview, Sprawl, Inbound. A window that lists
+A launcher and updater for the owner's apps: mdedit, mdview, Sprawl, Inbound, Purge. A window that lists
 them, shows which are installed and which have an update, installs and updates them, and opens
 them. Rust, winit + softbuffer, every control drawn by hand, built on the shared crates
 (`Kaan88/markdown-shared-rs`) that mdedit and mdview use. Windows first.
@@ -35,9 +35,9 @@ Its sisters are `Kaan88/markdown-editor-rs` (mdedit; on this PC
 - It never ends a process (it asks an app to close and waits), is never elevated (a machine-wide
   setup is run through Windows' own prompt, at the owner's click), and never touches an app's
   settings, session or data.
-- Not an app store, not a package manager: a fixed catalog of four apps compiled in; no adding a
+- Not an app store, not a package manager: a fixed catalog of five apps compiled in; no adding a
   repository by URL; no zip unpacking, no delta updates, no signatures (SHA-256 over TLS).
-- Scope of this slice: mdedit, mdview, Sprawl, Inbound.
+- Scope: mdedit, mdview, Sprawl, Inbound, Purge (Purge added by D-030).
 
 ## The rules
 
@@ -49,7 +49,7 @@ Its sisters are `Kaan88/markdown-editor-rs` (mdedit; on this PC
 3. **fmt and clippy are clean before a push**: `cargo fmt --all --check` and
    `cargo clippy --release --workspace --all-targets -- -D warnings`.
 4. **No real install, ever, on this PC.** Hub's tests and runs never install, update, uninstall or
-   alter a real app of the owner's (mdedit, mdview, Sprawl, Inbound, anything). Every run of the
+   alter a real app of the owner's (mdedit, mdview, Sprawl, Inbound, Purge, anything). Every run of the
    `hub` exe, by hand or by test, uses `HUB_DATA` naming a scratch folder, a fake programs root
    (`HUB_PROGRAMS`, `HUB_PROGRAM_FILES`), and `HUB_FETCH_ROOT` (a `--features test-hooks` build)
    in place of the network. Never the real `%LOCALAPPDATA%\Hub`, never the owner's mdedit

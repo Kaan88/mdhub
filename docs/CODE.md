@@ -68,22 +68,12 @@ File names are `<state>-<view>-<theme>-<W>x<H>.png`. `shots.sh` stops when `demo
 it does not list. A new visible state: add it to `demo.rs` (`NAMES` and `build`), to `DEMOS` in
 `shots.sh`, and look at its shots in both themes. No pixel comparison in CI (fonts differ).
 
-## The check a Rust crate can run on the samples
+## The samples are tested
 
-`tools/samples/<app>/hub.txt` are written by `tools/make-samples.ps1`; they must parse. No test
-exists yet (that is source, not mine to write here). From a scratch crate with a path dependency
-on `hub-core` this was run on 2026-11-22 and all four parsed and round-tripped:
-
-```rust
-for app in hub_core::catalog::CATALOG.iter() {
-    let bytes = std::fs::read(format!("tools/samples/{}/hub.txt", app.id)).unwrap();
-    let m = hub_core::manifest::parse(&bytes, app).unwrap();
-    assert_eq!(hub_core::manifest::parse(hub_core::manifest::write(&m).as_bytes(), app).unwrap(), m);
-}
-```
-
-As an integration test, `crates/hub-core/tests/samples.rs` with the same loop and the folder
-`concat!(env!("CARGO_MANIFEST_DIR"), "/../../tools/samples/")`.
+`tools/samples/<app>/hub.txt` are written by `tools/make-samples.ps1`; they must parse.
+`crates/hub-core/tests/samples.rs` reads the sample of every catalog app from
+`concat!(env!("CARGO_MANIFEST_DIR"), "/../../tools/samples/")`, parses it with that app's catalog
+entry and round-trips it through the writer, so a new catalog app needs a sample too.
 
 ## Writing a hub.txt
 

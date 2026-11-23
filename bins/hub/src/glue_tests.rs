@@ -349,14 +349,15 @@ fn keys_map_to_commands() {
 #[test]
 fn the_filter_selection_and_escape() {
     let mut fx = Fx::new("keys");
-    assert_eq!(fx.vm().apps.len(), 4);
+    let n = hub_core::catalog::CATALOG.len();
+    assert_eq!(fx.vm().apps.len(), n);
     assert_eq!(fx.vm().sel, 0);
     // Arrow keys stop at the ends.
     fx.cmd(Cmd::SelectRel(1));
     fx.cmd(Cmd::SelectRel(1));
     assert_eq!(fx.vm().sel, 2);
     fx.cmd(Cmd::SelectRel(10));
-    assert_eq!(fx.vm().sel, 3);
+    assert_eq!(fx.vm().sel, n - 1);
     fx.cmd(Cmd::SelectRel(-10));
     assert_eq!(fx.vm().sel, 0);
     // Typing filters by name and id, any case; the selection starts again at the top.
@@ -380,7 +381,7 @@ fn the_filter_selection_and_escape() {
     // Esc clears the text; a second Esc leaves the box.
     fx.cmd(Cmd::Esc);
     assert_eq!(fx.vm().filter, "");
-    assert_eq!(fx.vm().apps.len(), 4);
+    assert_eq!(fx.vm().apps.len(), n);
     assert!(fx.vm().filter_focus);
     fx.cmd(Cmd::Esc);
     assert!(!fx.vm().filter_focus);

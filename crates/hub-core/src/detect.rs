@@ -806,6 +806,18 @@ mod tests {
     }
 
     #[test]
+    fn purge_is_found_in_its_program_files_folder() {
+        let sc = Scratch::new("pf-purge");
+        let store = Store::at(sc.path().join("hub"));
+        let purge = find("purge").unwrap();
+        let exe = sc.exe("PF/Purge/Purge.exe");
+        let got = detect(purge, &store, &env(&sc, None)).unwrap();
+        assert_eq!(got.source, Source::Folder);
+        assert_eq!(got.folder, sc.path().join("PF").join("Purge"));
+        assert_eq!(got.exe, exe);
+    }
+
+    #[test]
     fn an_exe_in_a_subfolder_is_found_for_inbound() {
         let sc = Scratch::new("inbound");
         let store = Store::at(sc.path().join("hub"));

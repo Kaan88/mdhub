@@ -1,6 +1,6 @@
 # Hub
 
-A launcher and updater for four apps: **mdedit**, **mdview**, **Sprawl** and **Inbound**. One
+A launcher and updater for five apps: **mdedit**, **mdview**, **Sprawl**, **Inbound** and **Purge**. One
 window shows which are installed, which have an update, what the update brings, and installs,
 updates, rolls back and opens them. Windows first. Not released; nothing here has been published.
 

@@ -753,12 +753,34 @@ mod tests {
         );
         t
     }
+    fn purge_txt() -> String {
+        let a = app("purge");
+        let mut t = String::from(
+            "hub: 1\napp: purge\nversion: 0.1.0\ndate: 2026-11-23\n\
+             notes: Uninstalls programs and the leftovers they leave behind.\n",
+        );
+        t += &format!("{W}.kind: setup\n{W}.exe: Purge.exe\n");
+        t += &fl(
+            a,
+            &format!("{W}.setup"),
+            "v0.1.0",
+            "Purge-Setup-0.1.0.exe",
+            43_710_970,
+        );
+        t += &format!(
+            "{W}.setup.silent: {SILENT}\n{W}.setup.scope: machine\n\
+             {W}.uninstall: {{7C1B9E64-2D58-4F1A-9B03-6E4C5A8D7F21}}_is1\n\
+             {W}.wait: Purge.exe, purge-engine.exe, purge-broker.exe\n"
+        );
+        t
+    }
     fn fixtures() -> Vec<(&'static str, String)> {
         vec![
             ("mdedit", mdedit_txt()),
             ("mdview", mdview_txt()),
             ("sprawl", sprawl_txt()),
             ("inbound", inbound_txt()),
+            ("purge", purge_txt()),
         ]
     }
 
@@ -855,6 +877,25 @@ mod tests {
         assert_eq!(s.silent, "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART");
         assert_eq!(s.file.size, 5_544_567);
         assert_eq!(e.uninstall.as_deref(), Some("Sprawl_is1"));
+    }
+
+    #[test]
+    fn purge_setup_for_all_users_waits_for_its_helpers() {
+        let m = ok("purge", &purge_txt());
+        let e = m.entry().unwrap();
+        assert_eq!(e.kind, Kind::Setup);
+        assert_eq!(e.exe.as_deref(), Some("Purge.exe"));
+        assert_eq!(
+            e.wait,
+            ["Purge.exe", "purge-engine.exe", "purge-broker.exe"]
+        );
+        let s = e.setup.as_ref().unwrap();
+        assert_eq!(s.scope, Scope::Machine);
+        assert_eq!(s.silent, "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART");
+        assert_eq!(
+            e.uninstall.as_deref(),
+            Some("{7C1B9E64-2D58-4F1A-9B03-6E4C5A8D7F21}_is1")
+        );
     }
 
     #[test]
