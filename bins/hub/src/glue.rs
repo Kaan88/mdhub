@@ -3,7 +3,7 @@
 //! the work on worker threads one install at a time, and builds the `Vm` the drawing code reads.
 //! Nothing here touches a window, so every behaviour is tested without one. Nothing here asks the
 //! network anything until a check is asked for (the first one is scheduled, never run at start).
-use crate::vm::{Act, AppVm, Banner, Hit, NotesState, NotesVm, View, Vm};
+use crate::vm::{Act, AppVm, Banner, Hit, NotesState, NotesVm, Pointer, View, Vm};
 use crate::work;
 use hub_core::catalog::{CATALOG, CatalogApp};
 use hub_core::check;
@@ -547,6 +547,18 @@ pub fn act_cmd(id: &'static str, act: Act) -> Cmd {
     }
 }
 
+/// The offer bar that asks whether the open app `name` may be closed for its update. It closes a
+/// program the owner has open, so it is a warning: the bar shows the warning sign.
+pub fn close_question(name: &str) -> Banner {
+    Banner {
+        text: format!("{name} is open: close it and update"),
+        yes: "Close and update".into(),
+        no: "Not now".into(),
+        warn: true,
+        hub: false,
+    }
+}
+
 /// What a click on `hit` asks for. Window hits (drag, min, max, close) are the shell's own.
 pub fn command(hit: Hit, vm: &Vm) -> Option<Cmd> {
     let id = |i: usize| vm.apps.get(i).map(|a| a.id);
@@ -569,7 +581,7 @@ pub fn command(hit: Hit, vm: &Vm) -> Option<Cmd> {
             Some(b) if b.hub => Cmd::HubRestart,
             _ => Cmd::BannerYes,
         }),
-        Hit::BannerNo => Some(match &vm.banner {
+        Hit::BannerNo | Hit::BannerClose => Some(match &vm.banner {
             Some(b) if b.hub => Cmd::HubLater,
             _ => Cmd::BannerNo,
         }),
@@ -715,6 +727,8 @@ pub struct Engine {
     /// The selection was moved or clicked by the user: only then does Enter act on it.
     sel_touched: bool,
     hover: Option<usize>,
+    /// The control under the pointer and the one held down: the buttons light from it.
+    pointer: Pointer,
     running_busy: bool,
     /// Apps the user said yes to closing (the offer bar), so the install may close them.
     consented: Vec<&'static str>,
@@ -846,6 +860,7 @@ impl Engine {
             running_busy: false,
             consented: Vec::new(),
             hover: None,
+            pointer: Pointer::default(),
             banner: None,
             pending_close: Vec::new(),
             queue: VecDeque::new(),
@@ -897,6 +912,7 @@ impl Engine {
             running_busy: false,
             consented: Vec::new(),
             hover: None,
+            pointer: Pointer::default(),
             banner: None,
             pending_close: Vec::new(),
             queue: VecDeque::new(),
@@ -1016,13 +1032,7 @@ impl Engine {
             .banner
             .and_then(|id| {
                 let name = CATALOG.iter().find(|c| c.id == id)?.name;
-                Some(Banner {
-                    text: format!("{name} is open: close it and update"),
-                    yes: "Close and update".into(),
-                    no: "Not now".into(),
-                    warn: false,
-                    hub: false,
-                })
+                Some(close_question(name))
             })
             // Hub's own update, once it is downloaded: after an app's question, never over it.
             .or_else(|| {
@@ -1054,6 +1064,7 @@ impl Engine {
         Vm {
             sel,
             hover: self.hover.filter(|h| *h < apps.len()),
+            pointer: self.pointer,
             view: self.view,
             banner: banner.or_else(|| self.fixed.as_ref().and_then(|v| v.banner.clone())),
             checked,
@@ -1079,6 +1090,27 @@ impl Engine {
         let changed = self.hover != h;
         self.hover = h;
         changed
+    }
+
+    /// The control under the pointer (`Hit::None` for none): true when that changed, so the
+    /// window redraws only when a button's light changes, never while the pointer rests.
+    pub fn set_hot(&mut self, hot: Hit) -> bool {
+        let changed = self.pointer.hot != hot;
+        self.pointer.hot = hot;
+        changed
+    }
+
+    /// What the pointer is over and holds down.
+    pub fn pointer(&self) -> Pointer {
+        self.pointer
+    }
+
+    /// The control the left button went down on (`Hit::None` once it is up): true when the
+    /// picture changes.
+    pub fn set_held(&mut self, held: Hit) -> bool {
+        let before = self.pointer;
+        self.pointer.held = held;
+        before.held != held && (self.pointer.over(held) || before.over(before.held))
     }
 
     /// Is the offer bar asking whether an open app may be closed? Only a window can show it.

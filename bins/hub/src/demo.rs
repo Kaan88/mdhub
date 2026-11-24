@@ -1,7 +1,8 @@
 //! Fake Vm states for the pictures and the tests: `hub --shot out.png --demo NAME`.
 //! Everything here is made up; nothing reads this PC.
+use crate::glue::close_question;
 use crate::settings;
-use crate::vm::{AppVm, Banner, NotesState, NotesVm, View, Vm};
+use crate::vm::{Act, AppVm, Banner, Hit, NotesState, NotesVm, Pointer, View, Vm};
 use hub_core::catalog::{CATALOG, CatalogApp};
 use hub_core::model::Row;
 
@@ -24,6 +25,16 @@ pub const NAMES: &[&str] = &[
     "notes-failed",
     "notes-nofile",
     "notes-long",
+    "hover-close",
+    "hover-min",
+    "hover-bar",
+    "hover-primary",
+    "pressed-primary",
+    "hover-open",
+    "hover-menu",
+    "close-question",
+    "close-question-yes",
+    "close-question-no",
 ];
 
 /// What a release notes file of mdedit 1.2.1 could look like: every construct the page reads.
@@ -430,6 +441,46 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
                     _ => NotesState::Loaded(SAMPLE_NOTES.to_string()),
                 },
             });
+            v
+        }
+        // The main window with the pointer over one control: the window's close button (red),
+        // its minimize button, "Check now", "Update all" (and that one held down), a row's Open
+        // button and its "..." menu (the row under them lit as well).
+        "hover-close" | "hover-min" | "hover-bar" | "hover-primary" | "pressed-primary"
+        | "hover-open" | "hover-menu" => {
+            let mut v = build("main", view)?;
+            let hot = match name {
+                "hover-close" => Hit::Close,
+                "hover-min" => Hit::Min,
+                "hover-bar" => Hit::CheckNow,
+                "hover-primary" | "pressed-primary" => Hit::UpdateAll,
+                "hover-open" => Hit::Action(1, Act::Open),
+                _ => Hit::Menu(1),
+            };
+            if matches!(hot, Hit::Action(..) | Hit::Menu(_)) {
+                v.hover = Some(1);
+            }
+            v.pointer = Pointer {
+                hot,
+                held: if name == "pressed-primary" {
+                    hot
+                } else {
+                    Hit::None
+                },
+            };
+            v
+        }
+        // The question before an open app is closed for its update (Inbound is running in
+        // "main"): the bar alone, then with the pointer on its yes and on its no.
+        "close-question" | "close-question-yes" | "close-question-no" => {
+            let mut v = build("main", view)?;
+            v.banner = Some(close_question("Inbound"));
+            v.sel = 3;
+            v.pointer.hot = match name {
+                "close-question-yes" => Hit::BannerYes,
+                "close-question-no" => Hit::BannerNo,
+                _ => Hit::None,
+            };
             v
         }
         _ => return None,

@@ -11,7 +11,7 @@
 //! Layout is done once per (text, width, scale) and kept (`laid`), so a scroll frame only walks
 //! the laid primitives and draws the ones in view.
 use crate::ui::{self, blue, red};
-use crate::vm::{Hit, Layout, NotesState, NotesVm};
+use crate::vm::{Hit, Layout, NotesState, NotesVm, Pointer};
 use mdshared_ui::gfx::{Face, Painter, Rect, Rgb, mix};
 use mdshared_ui::scroll;
 use mdshared_ui::theme::Palette;
@@ -1040,6 +1040,7 @@ pub fn draw_page(
     r: Rect,
     n: &NotesVm,
     scroll: f32,
+    ptr: &Pointer,
     lay: &mut Layout,
 ) {
     let px = p.px().max(1.0);
@@ -1050,9 +1051,7 @@ pub fn draw_page(
     p.fill(head, pal.pane);
     p.fill(Rect::new(head.x, head.bottom() - px, head.w, px), pal.line);
     let back = Rect::new(head.x + 10.0, head.y + (head.h - 32.0) / 2.0, 32.0, 32.0);
-    if let Some(fill) = mdshared_ui::chrome::button_fill(pal, false, false, false, false) {
-        p.rbox(back, 6.0, fill);
-    }
+    ui::quiet_fill(p, pal, back, 6.0, ptr.look(Hit::NotesBack));
     p.icon(BACK_ICON, 15.0, back.cx(), back.cy(), pal.text);
     lay.hits.push((back, Hit::NotesBack));
     let tx = back.right() + 12.0;
@@ -1083,7 +1082,8 @@ pub fn draw_page(
     p.fill(Rect::new(foot.x, foot.y, foot.w, px), pal.line);
     let fy = foot.cy();
     let old = p.clip(foot);
-    let page = ui::sbtn_r(p, pal, foot.right() - 14.0, fy, "Release page", false, true);
+    let look = ptr.look(Hit::NotesPage);
+    let page = ui::sbtn_r(p, pal, foot.right() - 14.0, fy, "Release page", false, look);
     lay.hits.push((page, Hit::NotesPage));
     let mut line = version_line(n);
     if !n.date.is_empty() {
@@ -1161,7 +1161,7 @@ pub fn draw_page(
     }
     if matches!(n.state, NotesState::Failed(_)) {
         let by = ex_top + extra_h - 28.0 + 14.0;
-        let b = ui::sbtn(p, pal, cx, by, "Try again", true, true);
+        let b = ui::sbtn(p, pal, cx, by, "Try again", true, ptr.look(Hit::NotesRetry));
         if let Some(v) = ui::intersect(b, body) {
             lay.hits.push((v, Hit::NotesRetry));
         }

@@ -277,6 +277,7 @@ fn a_click_that_answers_an_app_banner_never_answers_hubs_restart_bar() {
     assert!(vm.banner.as_ref().is_some_and(|b| b.hub));
     assert_eq!(command(Hit::BannerYes, &vm), Some(Cmd::HubRestart));
     assert_eq!(command(Hit::BannerNo, &vm), Some(Cmd::HubLater));
+    assert_eq!(command(Hit::BannerClose, &vm), Some(Cmd::HubLater));
     // The second click of a double-click on an app's "Close and update" arrives after that bar
     // is gone and Hub's has taken its place: it answers nothing.
     fx.cmd(Cmd::BannerYes);
@@ -294,6 +295,7 @@ fn a_click_that_answers_an_app_banner_never_answers_hubs_restart_bar() {
     vm.banner = Some(app);
     assert_eq!(command(Hit::BannerYes, &vm), Some(Cmd::BannerYes));
     assert_eq!(command(Hit::BannerNo, &vm), Some(Cmd::BannerNo));
+    assert_eq!(command(Hit::BannerClose, &vm), Some(Cmd::BannerNo));
 }
 
 #[test]

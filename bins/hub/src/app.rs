@@ -308,6 +308,14 @@ impl App {
         if self.popup.is_none() && self.engine.set_hover(hover_row(&self.layout, self.mouse)) {
             self.dirty = true;
         }
+        // And so does the lit button.
+        let covered = self.popup.is_some() || self.settings.is_some();
+        if self
+            .engine
+            .set_hot(hot_hit(&self.layout, self.mouse, covered))
+        {
+            self.dirty = true;
+        }
         self.present();
     }
 
@@ -335,6 +343,9 @@ impl App {
 
     fn cursor_moved(&mut self, x: f32, y: f32) {
         self.mouse = (x, y);
+        if (self.settings.is_some() || self.popup.is_some()) && self.engine.set_hot(Hit::None) {
+            self.dirty = true;
+        }
         if let Some(form) = &mut self.settings {
             if form.pointer_move(x, y) {
                 self.dirty = true;
@@ -364,6 +375,15 @@ impl App {
             }
         }
         if self.engine.set_hover(hover_row(&self.layout, (x, y))) {
+            self.dirty = true;
+        }
+        // On a resize edge a press resizes: no button lights there.
+        let hot = if edge.is_some() {
+            Hit::None
+        } else {
+            hot_hit(&self.layout, (x, y), false)
+        };
+        if self.engine.set_hot(hot) {
             self.dirty = true;
         }
     }
@@ -642,6 +662,12 @@ fn closes_popup(ev: &WindowEvent) -> bool {
     )
 }
 
+/// The control the pointer lights: what the last frame drew under it, or nothing while the
+/// settings card or a menu covers the window.
+fn hot_hit(layout: &Layout, (x, y): (f32, f32), covered: bool) -> Hit {
+    if covered { Hit::None } else { layout.at(x, y) }
+}
+
 /// The row (or its button) under the pointer.
 fn hover_row(layout: &Layout, (x, y): (f32, f32)) -> Option<usize> {
     match layout.at(x, y) {
@@ -744,6 +770,10 @@ impl ApplicationHandler<Event> for App {
             }
             WindowEvent::Focused(focused) => {
                 self.engine.set_focused(focused);
+                // A press that ended elsewhere (minimized, dragged, another window) is over.
+                if !focused && self.engine.set_held(Hit::None) {
+                    self.dirty = true;
+                }
                 // An app may have been started or closed meanwhile.
                 if focused && self.last_running.elapsed() >= RUNNING_EVERY {
                     self.last_running = Instant::now();
@@ -757,7 +787,7 @@ impl ApplicationHandler<Event> for App {
                 );
             }
             WindowEvent::CursorLeft { .. } => {
-                if self.engine.set_hover(None) {
+                if self.engine.set_hover(None) | self.engine.set_hot(Hit::None) {
                     self.dirty = true;
                 }
             }
@@ -769,6 +799,11 @@ impl ApplicationHandler<Event> for App {
                 if self.settings.is_some() {
                     self.settings_press();
                 } else {
+                    // The button looks pressed until the release (the press already acted).
+                    let at = self.engine.pointer().hot;
+                    if self.engine.set_held(at) {
+                        self.dirty = true;
+                    }
                     self.click();
                 }
             }
@@ -776,7 +811,12 @@ impl ApplicationHandler<Event> for App {
                 state: ElementState::Released,
                 button: MouseButton::Left,
                 ..
-            } => self.settings_release(),
+            } => {
+                if self.engine.set_held(Hit::None) {
+                    self.dirty = true;
+                }
+                self.settings_release();
+            }
             WindowEvent::MouseWheel { delta, .. } => {
                 let dy = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y * ROW_H,
@@ -994,6 +1034,8 @@ impl App {
         self.first = false;
         self.dirty = false;
         self.engine.set_hover(None);
+        self.engine.set_hot(Hit::None);
+        self.engine.set_held(Hit::None);
         self.trace.memory("window closed");
     }
 
