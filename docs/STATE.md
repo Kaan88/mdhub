@@ -52,7 +52,7 @@ fix for updating an open Inbound or Sprawl (D-029) is not yet confirmed on the o
   `notes.file` is one GET (64 KiB, 10 s) only when the view is opened, kept on disk by app and
   version; loading, loaded, failed (reason, Try again) and no file are drawn.
 - Verified 2026-11-24 on this PC, with the backdrop: fmt clean; clippy `-D warnings` clean with and
-  without `--features test-hooks`; `cargo test --workspace --release` 167 passed (hub, 1 ignored:
+  without `--features test-hooks`; `cargo test --workspace --release` 166 passed (hub, 1 ignored:
   the icon generator) + 202 (hub-core, 1 ignored) + 2 (samples); `tests/shots.sh` 200 PNGs twice,
   byte-identical, `shots-check` 0 bad; against the 176 shots before it, 140 are byte-identical and
   the 36 `settings-*` differ only by the new row. Each backdrop test fails with its fix reverted.
