@@ -1,5 +1,7 @@
 //! Small drawing helpers the window shares: wrapped text, buttons, tiles, progress bars, dots,
 //! the status colours, and rectangle clipping for the hit list.
+use crate::vm::Look;
+use mdshared_ui::chrome::button_fill;
 use mdshared_ui::gfx::{Face, Painter, Rect, Rgb, mix};
 use mdshared_ui::glyph;
 use mdshared_ui::theme::Palette;
@@ -151,7 +153,17 @@ pub fn btn_w(p: &mut Painter, label: &str) -> f32 {
     (p.measure(Face::Semibold, 12.5, label) + 26.0).round()
 }
 
-/// A 28 px button at `x`, centred on `cy`; returns its rectangle.
+/// The fill of an accent button: lighter (dark theme: darker) while hovered, more while pressed,
+/// as the shared offer bar's buttons do.
+pub fn accent_fill(pal: &Palette, look: Look) -> Rgb {
+    match (look.hovered, look.pressed) {
+        (true, true) => mix(pal.accent, pal.page, 0.2),
+        (true, false) => mix(pal.accent, pal.page, 0.1),
+        _ => pal.accent,
+    }
+}
+
+/// A 28 px button at `x`, centred on `cy`, drawn as `look` says; returns its rectangle.
 pub fn sbtn(
     p: &mut Painter,
     pal: &Palette,
@@ -159,22 +171,29 @@ pub fn sbtn(
     cy: f32,
     label: &str,
     primary: bool,
-    enabled: bool,
+    look: Look,
 ) -> Rect {
     let w = btn_w(p, label);
     let r = Rect::new(x, cy - 14.0, w, 28.0);
-    if primary && enabled {
-        p.rbox(r, 5.0, pal.accent);
+    if primary {
+        p.rbox(r, 5.0, accent_fill(pal, look));
         p.text_center(Face::Semibold, 12.5, r, label, pal.on_accent);
     } else {
-        p.frame(r, 5.0, mix(pal.page, pal.text, 0.04), pal.line);
-        p.text_center(
-            Face::Ui,
-            12.5,
-            r,
-            label,
-            if enabled { pal.text } else { pal.faint },
-        );
+        // The row under a hovered button is lit too (`pal.hover`): the button takes a step past
+        // that colour, and a stronger frame, so it still stands apart from the row.
+        let (fill, line) = match (look.hovered, look.pressed) {
+            (true, true) => (
+                mix(pal.press, pal.text, 0.12),
+                mix(pal.line, pal.text, 0.35),
+            ),
+            (true, false) => (
+                mix(pal.hover, pal.text, 0.09),
+                mix(pal.line, pal.text, 0.25),
+            ),
+            _ => (mix(pal.page, pal.text, 0.04), pal.line),
+        };
+        p.frame(r, 5.0, fill, line);
+        p.text_center(Face::Ui, 12.5, r, label, pal.text);
     }
     r
 }
@@ -187,10 +206,28 @@ pub fn sbtn_r(
     cy: f32,
     label: &str,
     primary: bool,
-    enabled: bool,
+    look: Look,
 ) -> Rect {
     let w = btn_w(p, label);
-    sbtn(p, pal, right - w, cy, label, primary, enabled)
+    sbtn(p, pal, right - w, cy, label, primary, look)
+}
+
+/// The fill behind an icon button that sits on `ground` (a row or a tile, itself lit while the
+/// pointer is over it): a step darker than that ground while hovered, two while pressed.
+pub fn icon_fill(p: &mut Painter, pal: &Palette, r: Rect, ground: Rgb, look: Look) {
+    let lift = match (look.hovered, look.pressed) {
+        (true, true) => 0.16,
+        (true, false) => 0.09,
+        _ => return,
+    };
+    p.rbox(r, 5.0, mix(ground, pal.text, lift));
+}
+
+/// The fill behind a quiet icon or bar button (the shared rule: none at rest, hover, press).
+pub fn quiet_fill(p: &mut Painter, pal: &Palette, r: Rect, radius: f32, look: Look) {
+    if let Some(fill) = button_fill(pal, look.hovered, look.pressed, false, false) {
+        p.rbox(r, radius, fill);
+    }
 }
 
 pub fn progress(p: &mut Painter, pal: &Palette, r: Rect, f: f32, c: Rgb, bg: Rgb) {

@@ -120,10 +120,28 @@ fades it and pulls it to grey. A PNG that does not decode returns `false` and `u
 the catalog's colour and glyph; the title bar's own mark still uses the glyph tile. The badges are
 drawn over the icon as before.
 
+Hover and press (D-032): `Vm.pointer` is a `Pointer { hot, held }`, the `Hit` under the pointer
+and the one the left button went down on. Every button draws from it through `Pointer::look(hit)`:
+the window buttons and the offer bar through the shared `draw_win_button` / `OfferBarState`, the
+command bar's buttons, the sliders button, the view switch and the notes page's back arrow through
+`button_fill` (`ui::quiet_fill`), the accent buttons a step towards the page (`ui::accent_fill`,
+as the shared offer bar does), the row and tile buttons (`ui::sbtn`) a step past `pal.hover` with a
+stronger frame (the row under them is lit too), the "..." menus a step past their row or tile
+(`ui::icon_fill`); the pane's "Release notes" link is underlined. A held control looks pressed only
+while the pointer is still on it. The offer bar's X is a hit of its own (`Hit::BannerClose`, the
+same command as its No) so it lights alone. The engine keeps the pointer (`set_hot`, `set_held`,
+true only on a change); `app.rs` sets it on a move (none on a resize edge, under the card or a
+menu), on leaving, on press and release, on losing focus, and after each frame, and redraws only
+when it changed: nothing runs while the pointer rests. The close question (`glue::close_question`)
+is a warning: `warn: true`, the offer bar's warning sign in place of the download arrow.
+
 ## bins/hub: demo.rs, shot.rs
 `hub --shot out.png [--size WxH] [--scale N] [--light|--dark] [--view list|large|small] [--demo
 NAME]` renders a `Vm` with no window and no read of this PC. `demo.rs` builds the made-up Vms
-(`main, first-run, updating, failed, done, noinfo, running, banner, all, empty`); `tests/shots.sh`
+(`main, first-run, updating, failed, done, noinfo, running, banner, all, empty`, the notes and
+settings states, and the pointer states `hover-close hover-min hover-bar hover-primary
+pressed-primary hover-open hover-menu close-question close-question-yes close-question-no`);
+`tests/shots.sh`
 renders all of them. A shot is limited to 64 million pixels.
 
 ## bins/hub: glue.rs, work.rs, app.rs, cli.rs, trace.rs

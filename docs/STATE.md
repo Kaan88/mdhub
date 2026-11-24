@@ -31,9 +31,8 @@ they ran (no window to close); 0.1.2 has the fix (D-029), not yet confirmed on t
   work: `tray` (icon, system menu, balloon, on a thread of its own), `icon` (the icon and badge
   drawn at run time), `settings` (the card of the sliders button).
 - Tray: closing the window keeps Hub in the tray, "Quit Hub" / `hub --quit` ends it; `--tray`
-  starts with no window and the first check 2 minutes later; badge with the update count; one
-  balloon per check that found something (D-021); the icon is re-added on `TaskbarCreated`.
-- Start with Windows (Run key, off by default; only for an installed exe, D-020).
+  starts with no window, first check 2 minutes later; badge; one balloon per check that found
+  something (D-021); re-added on `TaskbarCreated`. Start with Windows: Run key, off (D-020).
 - Self-update (D-022): checked first, staged, swapped last, restart; works only for an installed
   copy, where it ran once (0.1.0 to 0.1.1, by the owner).
 - The installer (`packaging/windows/hub.iss`, Inno, per user) and the workflows `ci` and `release`:
@@ -50,15 +49,20 @@ they ran (no window to close); 0.1.2 has the fix (D-029), not yet confirmed on t
 - Closing an app (D-025, D-026): the offer bar's yes covers one install; a roll back of an open
   app is not started; a question with no window opens the window.
 - Settings card: start with Windows, tray, notifications, check interval, update Hub.
+- Hover and press (D-032, branch `claude/hover-and-close-warning-9d76a7`, not yet on `main`):
+  every button lights under the pointer and darkens while held (window buttons, command bar,
+  view switch, offer bar and its X, row and tile buttons, "..." menus, notes page buttons; the
+  "Release notes" link underlines); redrawn only when the control under the pointer changes. The
+  "close it and update" question is a warning (`warn: true`, the warning sign on the bar).
 - The release notes view (D-028): a page for the selected app's latest version with
   `mdedit 1.2.0 -> 1.2.1` and its date under the text; from the row menu, the pane's "Release
   notes" link and the key `n`; Esc, Backspace or the arrow go back. `notes` shows at once;
   `notes.file` is one GET (64 KiB, 10 s) only when the view is opened, kept on disk by app and
   version; loading, loaded, failed (reason, Try again) and no file are drawn. The scrollbar's thumb
   drags, a track click pages toward it, the bar widens under the pointer (`notes-bar-active`).
-- Verified 2026-11-24 (notes scrollbar drag): fmt, clippy (with and without test-hooks) clean;
-  tests 165 (hub) + 201 (hub-core) + 2; 180 shots twice, byte-identical, 0 bad. The whole repository
-  2026-11-22: 129 + 183, both clippies, no `HKCU\Software\HubTest` left behind.
+- Verified 2026-11-24, each branch on its own: the notes scrollbar drag (165 + 201 + 2 tests, 180
+  shots) and hover and press (165 + 201 + 2, 296 shots, both themes looked at); fmt and both
+  clippies clean on each. The merged release is verified below it. The whole repository 2026-11-22.
 - Reviewed 2026-11-22, the whole repository: 36 safety rules were removed one at a time (hash and
   size checks, URL pins, the Run value's quoting, asking before closing, one install at a time);
   33 failed a test, 2 had none and got one, 1 is covered by a second check. 200,000 mutated
@@ -74,19 +78,17 @@ they ran (no window to close); 0.1.2 has the fix (D-029), not yet confirmed on t
   | idle CPU over 10 s, tray only / window open | 0 ms / 0 ms | none | 0 |
   | exe size | 3,441,664 bytes (after the icon and the fixes) | none | 3.18 MB |
   With the notes view (7 runs, `--demo main`): first frame 57.9 to 66.3 ms (median 59.5), private
-  memory 9.5 to 9.6 MiB, exe 3,638,272 bytes; a 64 KiB notes file lays out in 31 ms once, a scroll
-  frame draws in 0.16 ms from the kept layout. Scrollbar drag, 2 runs before / after: first frame
-  57.8, 56.9 / 69.3, 61.8 ms, private 9.5 / 9.5 MiB, no idle CPU, exe +1.5 KB.
-  **The times were NOT measured again after the icon, the review fixes, the notes view in a
-  window, Purge or Barbican**: two new rows add text and two decoded icons, nothing on the launch
-  path, but that is reasoning. Unmeasured: a real window-first start, memory with a long notes file
-  open, a real network fetch.
+  memory 9.5 to 9.6 MiB; a 64 KiB notes file lays out in 31 ms once, a scroll frame draws in
+  0.16 ms from the kept layout. With hover and press (7 runs, 2026-11-24): first frame median
+  53.8 ms, 51.6 to 61.0; private 9.5 to 9.6 MiB; 0 ms CPU at rest. Unmeasured: tray-only memory
+  since the tray work, a real window-first start, a real network fetch.
 
 ## What does not exist
 
 - **Seen live: nothing new.** The Purge and Barbican rows were looked at in a shot, not in a run
   against real data. The tray icon with its badge, the balloon, the tray menu, an Explorer restart
-  and a click in the settings card were not seen or used by a person.
+  and a click in the settings card were not seen or used by a person. Hover and press were seen in
+  shots only: the pointer wiring in `app.rs` is compiled, not driven by a mouse, and has no test.
 - An install, update or roll back of Purge or Barbican run by Hub on this PC: neither has been
   installed by it (CLAUDE.md rule 4 keeps that off this machine); Barbican has no release.
 - The notes view in a real window: the page's wiring in `app.rs` (wheel, keys, scroll kept per
@@ -105,11 +107,13 @@ they ran (no window to close); 0.1.2 has the fix (D-029), not yet confirmed on t
 
 ## Known wrong, or at risk
 
-- Closing the window leaves the tray process at 5 to 6 MiB, not the 2.9 MiB it started with. Under
-  budget, but not back to start.
+- Closing the window leaves the tray at 5 to 6 MiB, not the 2.9 MiB it started with (in budget).
 - The settings card's category list marks a group but shows all three at once (D-023).
-- The ci workflow's Windows job and the pinned toolchain `1.99.1` pass, but the shots it uploads are
-  never looked at by anyone; there is no tray menu shot (the menu is the system's).
+- The close question's warning is weak: the shared offer bar draws its sign in muted grey on the
+  ordinary bar colour, and it still appears at once. A warning-tinted bar (`pal.warn_bg`) needs an
+  opt-in variant in `markdown-shared-rs`; not built, the owner decides.
+- The title bar's max button is always drawn as "not maximized" (`app.rs` ignores the state).
+- Nobody looks at the shots `ci` uploads; there is no tray menu shot (the menu is the system's).
 - Quitting Hub during an install waits 8 seconds for it and then ends the process: an install caught
   while placing files is cut off there.
 - A setup runs from Hub's cache folder, which this user can write to, also when it is elevated.
@@ -127,18 +131,15 @@ they ran (no window to close); 0.1.2 has the fix (D-029), not yet confirmed on t
   the stopgap (D-003); Purge 0.1.0 has `hub.txt` (D-030).
 - The catalog's `wait` list for Inbound lacks `DownloadManager.Server.exe` and `inbound-torrent.exe`.
 - A download is a memory spike of the file's size during an install (68.7 MiB for Inbound): the
-  30 MiB budget holds at rest only.
-- Samples have CRLF in a Windows checkout, no `.gitattributes`.
+  30 MiB budget holds at rest only. Samples have CRLF in a Windows checkout, no `.gitattributes`.
 
 ## Reviewed, and by whom
 
 - Fable (a second model) reviewed the whole repository once, up to `8b2543a` (the icon): three
   passes, six defects fixed with tests (`48a9005` to `1f1a161`), 36 safety rules mutation-checked,
   200,000 fuzzed inputs, the FFI read for leaks.
-- Not reviewed by Fable, written and checked by Sonnet agents only: the apps' own icons, the release
-  notes page (fetch, cache), the 0.1.1 and 0.1.2 bumps, the Purge entry (PR #1), the Barbican entry
-  (PR #2), the 0.1.3 bump; the notes scrollbar drag by an Opus agent alone. No second reviewer.
-- No human has read the code.
+- Not reviewed by a second model: the apps' icons, the notes page, the bumps, the Purge and
+  Barbican entries, the notes scrollbar drag, hover and press. No human has read the code.
 
 ## Next
 

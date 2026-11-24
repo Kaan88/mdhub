@@ -517,9 +517,15 @@ fn the_offer_bar_has_yes_no_and_a_close_that_means_no() {
         .iter()
         .filter(|(_, h)| *h == Hit::BannerYes)
         .collect();
-    let no: Vec<_> = l.hits.iter().filter(|(_, h)| *h == Hit::BannerNo).collect();
+    // The No button and the X: two hits of their own (each lights alone), one meaning.
+    let no: Vec<_> = l
+        .hits
+        .iter()
+        .filter(|(_, h)| matches!(h, Hit::BannerNo | Hit::BannerClose))
+        .collect();
     assert_eq!(yes.len(), 1);
-    assert_eq!(no.len(), 2, "the No button and the X");
+    assert_eq!(count(&l, Hit::BannerNo), 1);
+    assert_eq!(count(&l, Hit::BannerClose), 1);
     assert!(!overlaps(yes[0].0, no[0].0) && !overlaps(yes[0].0, no[1].0));
     // All of them sit in the bar, under the command bar.
     for (r, _) in yes.iter().chain(no.iter()) {
@@ -879,4 +885,135 @@ fn the_scaled_icon_is_the_right_size_and_not_blank_at_every_size() {
             );
         }
     }
+}
+
+/// The pixels of `r` (logical px at scale 1) in `bmp`.
+fn region(bmp: &Bitmap, r: Rect) -> Vec<u8> {
+    let (w, h) = (bmp.width as i64, bmp.height as i64);
+    let mut out = Vec::new();
+    for y in (r.y.floor() as i64).max(0)..(r.bottom().ceil() as i64).min(h) {
+        for x in (r.x.floor() as i64).max(0)..(r.right().ceil() as i64).min(w) {
+            let o = ((y * w + x) * 4) as usize;
+            out.extend_from_slice(&bmp.pixels[o..o + 3]);
+        }
+    }
+    out
+}
+
+fn rect_of(lay: &Layout, hit: Hit) -> Rect {
+    lay.hits
+        .iter()
+        .find(|(_, h)| *h == hit)
+        .map(|(r, _)| *r)
+        .unwrap_or_else(|| panic!("no {hit:?} drawn"))
+}
+
+/// Every button the window draws, with the demo that shows it.
+fn buttons() -> Vec<(&'static str, View, Hit)> {
+    use crate::vm::Act;
+    vec![
+        ("main", View::List, Hit::Close),
+        ("main", View::List, Hit::Max),
+        ("main", View::List, Hit::Min),
+        ("main", View::List, Hit::UpdateAll),
+        ("main", View::List, Hit::CheckNow),
+        ("updating", View::List, Hit::CancelAll),
+        ("main", View::List, Hit::Settings),
+        ("main", View::List, Hit::ViewSwitch(View::Large)),
+        ("main", View::List, Hit::Action(0, Act::Update)),
+        ("main", View::List, Hit::Action(1, Act::Open)),
+        ("main", View::List, Hit::Menu(1)),
+        ("main", View::List, Hit::Notes(0)),
+        ("main", View::Large, Hit::Action(1, Act::Open)),
+        ("main", View::Large, Hit::Menu(1)),
+        ("close-question", View::List, Hit::BannerYes),
+        ("close-question", View::List, Hit::BannerNo),
+        ("close-question", View::List, Hit::BannerClose),
+        ("notes", View::List, Hit::NotesBack),
+        ("notes", View::List, Hit::NotesPage),
+        ("notes-failed", View::List, Hit::NotesRetry),
+    ]
+}
+
+#[test]
+fn every_button_lights_under_the_pointer_and_only_that_one() {
+    let mut gfx = Gfx::new();
+    for pal in [LIGHT, DARK] {
+        for (demo, view, hit) in buttons() {
+            let mut vm = demo::build(demo, view).unwrap();
+            vm.pointer = Default::default();
+            let (lay, rest) = draw_at(&mut gfx, &pal, &vm, 1280, 800, 0.0);
+            let r = rect_of(&lay, hit);
+            vm.pointer.hot = hit;
+            let (_, lit) = draw_at(&mut gfx, &pal, &vm, 1280, 800, 0.0);
+            assert_ne!(
+                region(&rest, r),
+                region(&lit, r),
+                "{hit:?} in {demo} shows no hover (dark {})",
+                pal.dark
+            );
+            // Nothing else in the command bar and the title lights with it.
+            for (other, _) in lay.hits.iter().filter(|(o, h)| {
+                *h != hit && o.bottom() <= 84.0 && !overlaps(*o, r) && *h != Hit::Drag
+            }) {
+                assert_eq!(
+                    region(&rest, *other),
+                    region(&lit, *other),
+                    "{hit:?} lit another control"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_held_button_looks_pressed_only_while_the_pointer_is_on_it() {
+    let mut gfx = Gfx::new();
+    for (demo, view, hit) in buttons() {
+        // A link and the bar's X have a hover only.
+        if matches!(hit, Hit::Notes(_) | Hit::BannerClose) {
+            continue;
+        }
+        let mut vm = demo::build(demo, view).unwrap();
+        vm.pointer.hot = hit;
+        let (lay, hovered) = draw_at(&mut gfx, &LIGHT, &vm, 1280, 800, 0.0);
+        let r = rect_of(&lay, hit);
+        vm.pointer.held = hit;
+        let (_, pressed) = draw_at(&mut gfx, &LIGHT, &vm, 1280, 800, 0.0);
+        assert_ne!(
+            region(&hovered, r),
+            region(&pressed, r),
+            "{hit:?} in {demo}"
+        );
+        // Held, but the pointer moved off it: not pressed, not lit.
+        vm.pointer.hot = Hit::None;
+        let (_, off) = draw_at(&mut gfx, &LIGHT, &vm, 1280, 800, 0.0);
+        vm.pointer = Default::default();
+        let (_, rest) = draw_at(&mut gfx, &LIGHT, &vm, 1280, 800, 0.0);
+        assert_eq!(region(&off, r), region(&rest, r), "{hit:?} in {demo}");
+    }
+}
+
+#[test]
+fn the_close_question_shows_the_warning_sign_and_hubs_own_bar_does_not() {
+    let q = crate::glue::close_question("Inbound");
+    assert!(q.warn, "closing an open app is a warning");
+    assert!(!q.hub);
+    assert_eq!(q.text, "Inbound is open: close it and update");
+    // The warning sign is what is drawn: the bar differs from the same bar marked as no warning,
+    // and only at its icon.
+    let mut gfx = Gfx::new();
+    let mut vm = demo::build("close-question", View::List).unwrap();
+    let (_, warn) = draw_at(&mut gfx, &LIGHT, &vm, 1280, 800, 0.0);
+    vm.banner.as_mut().unwrap().warn = false;
+    let (_, plain) = draw_at(&mut gfx, &LIGHT, &vm, 1280, 800, 0.0);
+    let icon = Rect::new(12.0, 84.0 + 7.0, 20.0, 20.0);
+    assert_ne!(region(&warn, icon), region(&plain, icon));
+    assert_eq!(
+        region(&warn, Rect::new(40.0, 84.0, 1200.0, 34.0)),
+        region(&plain, Rect::new(40.0, 84.0, 1200.0, 34.0))
+    );
+    // Hub's own "Restart now" stays an ordinary offer.
+    let own = demo::build("banner", View::List).unwrap();
+    assert!(!own.banner.unwrap().warn);
 }

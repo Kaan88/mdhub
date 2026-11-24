@@ -258,3 +258,15 @@ for Hub (D-007 not built).
 Would change: Barbican's release naming or AppId; a mail glyph in the shared set; a Barbican
 release, which adds its sample to `tools/samples` and takes it out of `tests/samples.rs`'s
 no-sample list.
+
+## D-032 Buttons draw hover and press from the pointer the shell keeps
+The owner saw no hover on any button. The `Vm` carries `pointer: Pointer { hot, held }`, the
+`Hit` under the pointer and the one the button went down on; every button draws from it (the
+shared `draw_win_button`, `OfferBarState` and `button_fill` where they apply, Hub's own `ui`
+helpers for the row, tile and accent buttons). The engine keeps it and says when it changed, and
+the window redraws only then, so a resting pointer costs nothing. A held control looks pressed only
+while the pointer is still on it. The offer bar's X became a hit of its own (`Hit::BannerClose`,
+the same command as No) so it lights alone. The "close it and update" question sets `warn: true`;
+the warning-tinted bar it really wants is left to the owner (an opt-in variant of the shared offer
+bar). Would change: the shared crate gaining a hover state of its own for these controls; the
+owner choosing a different way to ask before closing an app.

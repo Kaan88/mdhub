@@ -196,11 +196,10 @@ fn large(
     let t = Rect::new(cx - 28.0, c.y + 16.0, 56.0, 56.0);
     ui::app_tile(p, t, a.id, a.glyph, a.tile, not_in);
     badges(p, pal, t, a, bg);
+    let menu = Rect::new(c.right() - 30.0, c.y + 4.0, 26.0, 26.0);
+    ui::icon_fill(p, pal, menu, bg, vm.pointer.look(Hit::Menu(i)));
     p.icon(glyph::MORE, 15.0, c.right() - 16.0, c.y + 16.0, pal.muted);
-    hits.push((
-        Rect::new(c.right() - 30.0, c.y + 4.0, 26.0, 26.0),
-        Hit::Menu(i),
-    ));
+    hits.push((menu, Hit::Menu(i)));
     // Name and blurb.
     let tw = (c.w - 20.0).max(0.0);
     let line = |y: f32| Rect::new(c.x + 10.0, y - 10.0, tw, 20.0);
@@ -308,7 +307,7 @@ fn large(
             c.y + 174.0,
             b.label,
             b.primary,
-            true,
+            vm.pointer.look(Hit::Action(i, b.act)),
         );
         hits.push((r, Hit::Action(i, b.act)));
     }

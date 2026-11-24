@@ -670,6 +670,7 @@ fn an_app_that_is_open_is_asked_about_first_and_never_closed_without_a_yes() {
     fx.cmd(Cmd::Update("mdedit"));
     let b = fx.vm().banner.expect("the offer bar");
     assert_eq!(b.text, "mdedit is open: close it and update");
+    assert!(b.warn, "closing an open app is asked as a warning");
     assert!(!fx.eng.busy(), "nothing started yet");
     assert_eq!(fx.file_urls().len(), before, "nothing downloaded yet");
     // No: it goes away and nothing happened.
