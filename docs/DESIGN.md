@@ -252,7 +252,9 @@ tray, Tell me when updates are found, Look for updates (Every hour / 6 hours / d
 Never), About line and "Update Hub" (becomes "Restart now" once ready). The engine applies and
 saves a change (`state.rs`); the tray menu changes the same settings and the card is rebuilt
 when its rows differ. Opened by the sliders button (`Hit::Settings`). Shots: `settings-general`,
-`settings-updates`, `settings-about` (the last over the banner state).
+`settings-updates`, `settings-about` (the last over the banner state). One page (D-034): the
+shared form's `single_page()`, headings in the body and no category list; `page` only scrolls to a
+heading.
 "Window backdrop" (Off / Mica / Acrylic, General group, `state.rs` `backdrop`, off by default) is
 the shared `mdshared_app::backdrop::Backdrop`; the window follows it (`frost.rs` below).
 

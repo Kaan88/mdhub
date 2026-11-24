@@ -106,9 +106,10 @@ pub fn rows(m: &Model) -> Vec<Row> {
     ]
 }
 
-/// A form over `rows`, showing category `page`.
+/// A form over `rows`, scrolled to the heading of group `page`. One page, no category list:
+/// Hub has a handful of settings, and the owner wants them all in view (2026-11-24).
 pub fn form(rows: Vec<Row>, page: usize) -> Form {
-    let mut f = Form::new("Settings", rows);
+    let mut f = Form::new("Settings", rows).single_page();
     if page > 0 {
         f.jump_to_category(page);
     }
@@ -137,6 +138,24 @@ mod tests {
             version: "0.1.0".into(),
             hub_status: "Up to date".into(),
             hub_button: "Update Hub",
+        }
+    }
+
+    #[test]
+    fn the_card_is_one_page_with_no_category_list() {
+        let mut bmp = mdshared_text::bitmap::Bitmap::new(1200, 900);
+        let mut gfx = mdshared_ui::gfx::Gfx::new();
+        let mut p = Painter::new(&mut bmp, &mut gfx, 1.0);
+        for page in 0..PAGES.len() {
+            let mut f = form(rows(&model()), page);
+            // A window wide enough for the list, were it a paged form.
+            f.layout(&mut p, Rect::new(0.0, 0.0, 1200.0, 900.0));
+            assert!(!f.has_nav(), "page {page}: no category list");
+            assert_eq!(
+                f.categories(),
+                PAGES.to_vec(),
+                "the groups stay as headings"
+            );
         }
     }
 
