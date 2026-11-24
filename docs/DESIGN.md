@@ -155,8 +155,16 @@ version (a closed or moved view drops it; the worker has cached it anyway). `Cmd
 fetches again from Failed only; `Cmd::NotesPage` opens the release page; Esc and `NotesClose` leave.
 `Vm.notes: Option<NotesVm>` makes `view::draw_full` draw the page instead of the command bar, list
 and pane; `Layout` reports `notes_max_scroll` and `notes_view_h` and new hits `Notes(i)`,
-`NotesBack`, `NotesRetry`, `NotesPage`. `app.rs` keeps the page's own scroll (the list's is kept
+`NotesBack`, `NotesRetry`, `NotesPage`, `NotesTrack`, `NotesThumb` (the thumb front-most), and
+`notes_bar` (track, thumb) as drawn. `app.rs` keeps the page's own scroll (the list's is kept
 while it is open): wheel, arrows, PageUp/PageDown/Space, Home/End (`changelog::scrolled`, pure).
+The scrollbar, from the last frame's `Layout` (pure, in `changelog.rs`): `bar_press` turns a press
+on the thumb into `Grab(dy)` (where it was taken) and one on the track off the thumb into a page
+toward it; `bar_drag` puts the thumb's top at pointer y less dy and turns that into the text's
+offset with the shared `scroll::offset_for_thumb`, clamped, None on a closed page or a non-finite
+number. `app.rs` holds `ngrab` from the press to the release (or the window losing focus), and
+sets `NotesVm.bar_active` before each frame while the pointer is on the bar or drags it: the
+shared bar is then drawn wide (as mdedit's).
 The page: header (back arrow, "Release notes of X", the version), the scrolling body in a column
 at most 740 px wide with the shared overlay scrollbar, a footer with `mdedit 1.2.0 -> 1.2.1`, the
 date and "Release page".
@@ -168,9 +176,10 @@ than the column cut by characters, runs of one style merged, inline code with a 
 (the layout kept for the text, width and scale), `draw_page`. A scroll frame walks the laid
 primitives and draws those in view. Limits: 20,000 lines, 3,000 blocks, 1,500 characters a line,
 300 lines a code block, 4,000 characters an item, depth 3. Shots: `notes`, `notes-loading`,
-`notes-failed`, `notes-nofile`, `notes-long`, list view only (the view does not depend on it).
-Not covered: a scrollbar drag or click (the thumb is drawn, the wheel and keys move the text),
-an image or a table drawn as a grid, a link that opens.
+`notes-failed`, `notes-nofile`, `notes-long`, `notes-bar-active` (the long page, its bar under
+the pointer), list view only (the view does not depend on it).
+Not covered: a track held down repeating its page, an image or a table drawn as a grid, a link
+that opens.
 
 ## tools/
 `write-hub-txt.ps1` writes a `hub.txt` from a version, app, repository, notes and a list of files

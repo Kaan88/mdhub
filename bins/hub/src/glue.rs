@@ -573,7 +573,14 @@ pub fn command(hit: Hit, vm: &Vm) -> Option<Cmd> {
             Some(b) if b.hub => Cmd::HubLater,
             _ => Cmd::BannerNo,
         }),
-        Hit::Drag | Hit::Min | Hit::Max | Hit::Close | Hit::Settings | Hit::None => None,
+        Hit::Drag
+        | Hit::Min
+        | Hit::Max
+        | Hit::Close
+        | Hit::Settings
+        | Hit::NotesTrack
+        | Hit::NotesThumb
+        | Hit::None => None,
     }
 }
 
@@ -1716,6 +1723,7 @@ impl Engine {
             date: n.date.clone(),
             one_liner: n.one_liner.clone(),
             state: n.state.clone(),
+            bar_active: false,
         }
     }
 
