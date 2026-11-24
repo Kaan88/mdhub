@@ -270,6 +270,7 @@ fn a_hit_becomes_the_command_for_the_app_in_that_row_as_shown() {
     assert_eq!(command(Hit::Filter, &vm), Some(Cmd::FocusFilter));
     assert_eq!(command(Hit::BannerYes, &vm), Some(Cmd::BannerYes));
     assert_eq!(command(Hit::BannerNo, &vm), Some(Cmd::BannerNo));
+    assert_eq!(command(Hit::BannerClose, &vm), Some(Cmd::BannerNo));
     // The window's own hits are not commands, and a row that is gone is not an app.
     for h in [Hit::Drag, Hit::Min, Hit::Max, Hit::Close, Hit::None] {
         assert_eq!(command(h, &vm), None);
@@ -788,4 +789,32 @@ fn a_progress_report_of_a_self_closing_app_says_the_installer_closes_it() {
         other => panic!("{other:?}"),
     }
     assert!(crate::glue::phase_of(Progress::Finished).is_none());
+}
+
+#[test]
+fn the_control_under_the_pointer_reaches_the_drawing_and_redraws_only_on_a_change() {
+    let mut fx = Fx::new("pointer");
+    assert_eq!(fx.vm().pointer, crate::vm::Pointer::default());
+    // A move onto the close button: a change, and the Vm carries it to the drawing.
+    assert!(fx.eng.set_hot(Hit::Close));
+    assert_eq!(fx.vm().pointer.hot, Hit::Close);
+    assert!(fx.vm().pointer.look(Hit::Close).hovered);
+    assert!(!fx.vm().pointer.look(Hit::Min).hovered);
+    // Moves within it: no change, so no redraw.
+    assert!(!fx.eng.set_hot(Hit::Close));
+    // Pressed on it: pressed, once.
+    assert!(fx.eng.set_held(Hit::Close));
+    assert!(!fx.eng.set_held(Hit::Close));
+    assert!(fx.vm().pointer.look(Hit::Close).pressed);
+    // Off it while held: neither lit nor pressed; released there: nothing to redraw.
+    assert!(fx.eng.set_hot(Hit::Min));
+    assert!(!fx.vm().pointer.look(Hit::Close).pressed);
+    assert!(!fx.eng.set_held(Hit::None));
+    // Back on it, and released: the press goes.
+    assert!(fx.eng.set_hot(Hit::Close));
+    assert!(fx.eng.set_held(Hit::Close));
+    assert!(fx.eng.set_held(Hit::None));
+    assert!(!fx.vm().pointer.look(Hit::Close).pressed);
+    assert!(fx.eng.set_hot(Hit::None));
+    assert_eq!(fx.vm().pointer, crate::vm::Pointer::default());
 }

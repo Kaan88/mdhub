@@ -6,7 +6,7 @@
 //! of this PC's Hub, apps or registry is touched and nothing is asked of the network.
 use crate::e2e_tests::{Fx, body};
 use crate::glue::{Cmd, Event, RunKey, command};
-use crate::settings::{INTERVAL, NOTIFY, START, TRAY, UPDATE_HUB};
+use crate::settings::{BACKDROP, INTERVAL, NOTIFY, START, TRAY, UPDATE_HUB};
 use crate::vm::Hit;
 use hub_core::check;
 use hub_core::selfupdate::Status;
@@ -277,6 +277,7 @@ fn a_click_that_answers_an_app_banner_never_answers_hubs_restart_bar() {
     assert!(vm.banner.as_ref().is_some_and(|b| b.hub));
     assert_eq!(command(Hit::BannerYes, &vm), Some(Cmd::HubRestart));
     assert_eq!(command(Hit::BannerNo, &vm), Some(Cmd::HubLater));
+    assert_eq!(command(Hit::BannerClose, &vm), Some(Cmd::HubLater));
     // The second click of a double-click on an app's "Close and update" arrives after that bar
     // is gone and Hub's has taken its place: it answers nothing.
     fx.cmd(Cmd::BannerYes);
@@ -294,6 +295,7 @@ fn a_click_that_answers_an_app_banner_never_answers_hubs_restart_bar() {
     vm.banner = Some(app);
     assert_eq!(command(Hit::BannerYes, &vm), Some(Cmd::BannerYes));
     assert_eq!(command(Hit::BannerNo, &vm), Some(Cmd::BannerNo));
+    assert_eq!(command(Hit::BannerClose, &vm), Some(Cmd::BannerNo));
 }
 
 #[test]
@@ -680,6 +682,31 @@ fn the_check_interval_setting_changes_when_the_next_check_is_due() {
         Form::new("s", fx.eng.settings_rows()).value(INTERVAL),
         Some(Value::Choice(4))
     );
+}
+
+#[test]
+fn the_window_backdrop_setting_is_off_at_first_saved_and_read_back() {
+    use mdshared_app::backdrop::Backdrop;
+    let mut fx = Fx::new("set-backdrop");
+    let card = |fx: &Fx| Form::new("s", fx.eng.settings_rows()).value(BACKDROP);
+    assert_eq!(fx.eng.backdrop(), Backdrop::Off);
+    assert_eq!(card(&fx), Some(Value::Choice(0)));
+    // Each choice of the row, in the order of its labels.
+    for (i, b) in Backdrop::ALL.into_iter().enumerate() {
+        assert!(fx.eng.change_setting(BACKDROP, Value::Choice(i)));
+        assert_eq!(fx.eng.backdrop(), b);
+        assert_eq!(fx.eng.store.backdrop(), b, "saved");
+        assert_eq!(card(&fx), Some(Value::Choice(i)));
+    }
+    assert!(fx.eng.change_setting(BACKDROP, Value::Choice(1)));
+    // Not a choice: refused, nothing changed.
+    assert!(!fx.eng.change_setting(BACKDROP, Value::Choice(3)));
+    assert!(!fx.eng.change_setting(BACKDROP, Value::Bool(true)));
+    assert_eq!(fx.eng.backdrop(), Backdrop::Mica);
+    // The next start reads it back.
+    fx.restart();
+    assert_eq!(fx.eng.backdrop(), Backdrop::Mica);
+    assert_eq!(card(&fx), Some(Value::Choice(1)));
 }
 
 #[test]

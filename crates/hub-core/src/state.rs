@@ -2,6 +2,7 @@
 //! what it found), `settings.ini`, and the download cache. All in one folder, `$HUB_DATA` or
 //! `%LOCALAPPDATA%\Hub`, created on demand and never at open. Everything read from disk is
 //! parsed without a path that can panic; a damaged file reads as empty.
+use mdshared_app::backdrop::Backdrop;
 use mdshared_app::settings::{decode_path, encode_path, escape, unescape};
 use mdshared_app::update::Version;
 use std::ffi::OsString;
@@ -508,6 +509,22 @@ impl Store {
         self.set_flag("tray", on);
     }
 
+    /// "Window backdrop": what shows behind the window's chrome (Windows 11). Default off;
+    /// anything that is not one of the shared keys (`off`, `mica`, `acrylic`) is off.
+    pub fn backdrop(&self) -> Backdrop {
+        self.read_ini("settings.ini")
+            .get("settings", "backdrop")
+            .and_then(Backdrop::parse)
+            .unwrap_or_default()
+    }
+
+    pub fn set_backdrop(&self, b: Backdrop) {
+        self.modify("settings.ini", |ini| {
+            ini.set("settings", "backdrop", Some(b.key()));
+            true
+        });
+    }
+
     /// What Hub last wrote for "start with Windows". Only a record, for the settings page to
     /// show before it reads the registry: the registry value (`autostart.rs`) is the truth.
     /// Default off.
@@ -946,6 +963,41 @@ autostart=Yes
         assert_eq!(s.notified(), "mdedit 1.2.0	Sprawl 0.3.0");
         s.set_notified("");
         assert_eq!(s.notified(), "");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_backdrop_setting_defaults_to_off_and_round_trips() {
+        let dir = scratch("backdrop");
+        let s = Store::at(&dir);
+        assert_eq!(s.backdrop(), Backdrop::Off);
+        s.set_tray_enabled(false);
+        for b in Backdrop::ALL {
+            s.set_backdrop(b);
+            assert_eq!(s.backdrop(), b);
+        }
+        s.set_backdrop(Backdrop::Mica);
+        // A neighbour is not disturbed, and does not disturb it.
+        assert!(!s.tray_enabled());
+        s.set_interval_hours(3);
+        assert_eq!(s.backdrop(), Backdrop::Mica);
+        // Written by hand: any case is read, anything else is off.
+        std::fs::write(
+            dir.join("settings.ini"),
+            "[settings]
+backdrop= ACRYLIC 
+",
+        )
+        .unwrap();
+        assert_eq!(s.backdrop(), Backdrop::Acrylic);
+        std::fs::write(
+            dir.join("settings.ini"),
+            "[settings]
+backdrop=glass
+",
+        )
+        .unwrap();
+        assert_eq!(s.backdrop(), Backdrop::Off);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

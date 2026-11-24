@@ -3,7 +3,7 @@
 //! the work on worker threads one install at a time, and builds the `Vm` the drawing code reads.
 //! Nothing here touches a window, so every behaviour is tested without one. Nothing here asks the
 //! network anything until a check is asked for (the first one is scheduled, never run at start).
-use crate::vm::{Act, AppVm, Banner, Hit, NotesState, NotesVm, View, Vm};
+use crate::vm::{Act, AppVm, Banner, Hit, NotesState, NotesVm, Pointer, View, Vm};
 use crate::work;
 use hub_core::catalog::{CATALOG, CatalogApp};
 use hub_core::check;
@@ -15,6 +15,7 @@ use hub_core::notify::{Memory, Message, Pending};
 use hub_core::selfupdate::{self, Apply, Offer, Staged, Status};
 use hub_core::state::{Store, ViewMode};
 use hub_core::transport::Transport;
+use mdshared_app::backdrop::Backdrop;
 use mdshared_ui::settings::{Row as SettingRow, Value};
 use std::cell::Cell;
 use std::collections::VecDeque;
@@ -547,6 +548,18 @@ pub fn act_cmd(id: &'static str, act: Act) -> Cmd {
     }
 }
 
+/// The offer bar that asks whether the open app `name` may be closed for its update. It closes a
+/// program the owner has open, so it is a warning: the bar shows the warning sign.
+pub fn close_question(name: &str) -> Banner {
+    Banner {
+        text: format!("{name} is open: close it and update"),
+        yes: "Close and update".into(),
+        no: "Not now".into(),
+        warn: true,
+        hub: false,
+    }
+}
+
 /// What a click on `hit` asks for. Window hits (drag, min, max, close) are the shell's own.
 pub fn command(hit: Hit, vm: &Vm) -> Option<Cmd> {
     let id = |i: usize| vm.apps.get(i).map(|a| a.id);
@@ -569,11 +582,18 @@ pub fn command(hit: Hit, vm: &Vm) -> Option<Cmd> {
             Some(b) if b.hub => Cmd::HubRestart,
             _ => Cmd::BannerYes,
         }),
-        Hit::BannerNo => Some(match &vm.banner {
+        Hit::BannerNo | Hit::BannerClose => Some(match &vm.banner {
             Some(b) if b.hub => Cmd::HubLater,
             _ => Cmd::BannerNo,
         }),
-        Hit::Drag | Hit::Min | Hit::Max | Hit::Close | Hit::Settings | Hit::None => None,
+        Hit::Drag
+        | Hit::Min
+        | Hit::Max
+        | Hit::Close
+        | Hit::Settings
+        | Hit::NotesTrack
+        | Hit::NotesThumb
+        | Hit::None => None,
     }
 }
 
@@ -715,6 +735,8 @@ pub struct Engine {
     /// The selection was moved or clicked by the user: only then does Enter act on it.
     sel_touched: bool,
     hover: Option<usize>,
+    /// The control under the pointer and the one held down: the buttons light from it.
+    pointer: Pointer,
     running_busy: bool,
     /// Apps the user said yes to closing (the offer bar), so the install may close them.
     consented: Vec<&'static str>,
@@ -737,6 +759,8 @@ pub struct Engine {
     /// "Start with Windows" as the registry says, read when first wanted (never at start).
     autostart: Cell<Option<bool>>,
     tray_on: bool,
+    /// "Window backdrop" (the window follows it, `frost.rs`).
+    backdrop: Backdrop,
 }
 
 /// The release notes view that is open: which version's notes, and how far they have come.
@@ -824,10 +848,11 @@ impl Engine {
             d.store.failures(),
             d.store.interval_hours(),
         );
-        let (notified, notify_on, tray_on) = (
+        let (notified, notify_on, tray_on, backdrop) = (
             d.store.notified(),
             d.store.notify_enabled(),
             d.store.tray_enabled(),
+            d.store.backdrop(),
         );
         Engine {
             store: d.store,
@@ -846,6 +871,7 @@ impl Engine {
             running_busy: false,
             consented: Vec::new(),
             hover: None,
+            pointer: Pointer::default(),
             banner: None,
             pending_close: Vec::new(),
             queue: VecDeque::new(),
@@ -869,6 +895,7 @@ impl Engine {
             run_key: d.run_key,
             autostart: Cell::new(None),
             tray_on,
+            backdrop,
         }
     }
 
@@ -897,6 +924,7 @@ impl Engine {
             running_busy: false,
             consented: Vec::new(),
             hover: None,
+            pointer: Pointer::default(),
             banner: None,
             pending_close: Vec::new(),
             queue: VecDeque::new(),
@@ -920,6 +948,7 @@ impl Engine {
             run_key: RunKey::none(),
             autostart: Cell::new(Some(false)),
             tray_on: false,
+            backdrop: Backdrop::Off,
         }
     }
 
@@ -1016,13 +1045,7 @@ impl Engine {
             .banner
             .and_then(|id| {
                 let name = CATALOG.iter().find(|c| c.id == id)?.name;
-                Some(Banner {
-                    text: format!("{name} is open: close it and update"),
-                    yes: "Close and update".into(),
-                    no: "Not now".into(),
-                    warn: false,
-                    hub: false,
-                })
+                Some(close_question(name))
             })
             // Hub's own update, once it is downloaded: after an app's question, never over it.
             .or_else(|| {
@@ -1054,6 +1077,7 @@ impl Engine {
         Vm {
             sel,
             hover: self.hover.filter(|h| *h < apps.len()),
+            pointer: self.pointer,
             view: self.view,
             banner: banner.or_else(|| self.fixed.as_ref().and_then(|v| v.banner.clone())),
             checked,
@@ -1079,6 +1103,27 @@ impl Engine {
         let changed = self.hover != h;
         self.hover = h;
         changed
+    }
+
+    /// The control under the pointer (`Hit::None` for none): true when that changed, so the
+    /// window redraws only when a button's light changes, never while the pointer rests.
+    pub fn set_hot(&mut self, hot: Hit) -> bool {
+        let changed = self.pointer.hot != hot;
+        self.pointer.hot = hot;
+        changed
+    }
+
+    /// What the pointer is over and holds down.
+    pub fn pointer(&self) -> Pointer {
+        self.pointer
+    }
+
+    /// The control the left button went down on (`Hit::None` once it is up): true when the
+    /// picture changes.
+    pub fn set_held(&mut self, held: Hit) -> bool {
+        let before = self.pointer;
+        self.pointer.held = held;
+        before.held != held && (self.pointer.over(held) || before.over(before.held))
     }
 
     /// Is the offer bar asking whether an open app may be closed? Only a window can show it.
@@ -1716,6 +1761,7 @@ impl Engine {
             date: n.date.clone(),
             one_liner: n.one_liner.clone(),
             state: n.state.clone(),
+            bar_active: false,
         }
     }
 
@@ -2023,6 +2069,17 @@ impl Engine {
         }
     }
 
+    pub fn backdrop(&self) -> Backdrop {
+        self.backdrop
+    }
+
+    pub fn set_backdrop(&mut self, b: Backdrop) {
+        self.backdrop = b;
+        if self.fixed.is_none() {
+            self.store.set_backdrop(b);
+        }
+    }
+
     pub fn set_interval(&mut self, hours: u32) {
         self.interval = hours;
         if self.fixed.is_none() {
@@ -2088,6 +2145,7 @@ impl Engine {
             tray: self.tray_on,
             notify: self.tell.on,
             interval_hours: self.interval,
+            backdrop: self.backdrop,
             version: env!("CARGO_PKG_VERSION").to_string(),
             hub_status,
             hub_button,
@@ -2102,7 +2160,7 @@ impl Engine {
 
     /// A change made in the card: applied and saved. False for an id or a value that is not one.
     pub fn change_setting(&mut self, id: u32, value: Value) -> bool {
-        use crate::settings::{INTERVAL, NOTIFY, START, TRAY, interval_hours};
+        use crate::settings::{BACKDROP, INTERVAL, NOTIFY, START, TRAY, interval_hours};
         match (id, value) {
             (START, Value::Bool(on)) => self.set_autostart(on),
             (TRAY, Value::Bool(on)) => self.set_tray_enabled(on),
@@ -2111,6 +2169,9 @@ impl Engine {
                 Some(h) => self.set_interval(h),
                 None => return false,
             },
+            (BACKDROP, Value::Choice(i)) if i < Backdrop::ALL.len() => {
+                self.set_backdrop(Backdrop::from_index(i))
+            }
             _ => return false,
         }
         true

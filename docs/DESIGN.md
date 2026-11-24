@@ -53,7 +53,7 @@ m`; the tests and the samples use it).
 ## state.rs
 `Store {dir}`, `Store::open()` (`$HUB_DATA`, else `%LOCALAPPDATA%\Hub`; created on demand),
 `Store::at(dir)` for tests. `installed.ini` (a section per app: folder, exe, version, kind, date),
-`settings.ini` (`view`, `interval_hours` default 6, `[skipped]`), `checks.ini` (last attempt,
+`settings.ini` (`view`, `interval_hours` default 6, `backdrop` default off, `[skipped]`), `checks.ini` (last attempt,
 failure count), `latest\<id>.txt` (the cached manifest text, so the window has rows with no
 network), `cache\<id>-<version>` and a `rollback_dir`. Every read-modify-write holds
 `.hub.lock`, a stale lock is broken, temp files are named per process and write, and writes
@@ -120,11 +120,31 @@ fades it and pulls it to grey. A PNG that does not decode returns `false` and `u
 the catalog's colour and glyph; the title bar's own mark still uses the glyph tile. The badges are
 drawn over the icon as before.
 
+Hover and press (D-032): `Vm.pointer` is a `Pointer { hot, held }`, the `Hit` under the pointer
+and the one the left button went down on. Every button draws from it through `Pointer::look(hit)`:
+the window buttons and the offer bar through the shared `draw_win_button` / `OfferBarState`, the
+command bar's buttons, the sliders button, the view switch and the notes page's back arrow through
+`button_fill` (`ui::quiet_fill`), the accent buttons a step towards the page (`ui::accent_fill`,
+as the shared offer bar does), the row and tile buttons (`ui::sbtn`) a step past `pal.hover` with a
+stronger frame (the row under them is lit too), the "..." menus a step past their row or tile
+(`ui::icon_fill`); the pane's "Release notes" link is underlined. A held control looks pressed only
+while the pointer is still on it. The offer bar's X is a hit of its own (`Hit::BannerClose`, the
+same command as its No) so it lights alone. The engine keeps the pointer (`set_hot`, `set_held`,
+true only on a change); `app.rs` sets it on a move (none on a resize edge, under the card or a
+menu), on leaving, on press and release, on losing focus, and after each frame, and redraws only
+when it changed: nothing runs while the pointer rests. The close question (`glue::close_question`)
+is a warning: `warn: true`, the offer bar's warning sign in place of the download arrow.
+
 ## bins/hub: demo.rs, shot.rs
 `hub --shot out.png [--size WxH] [--scale N] [--light|--dark] [--view list|large|small] [--demo
 NAME]` renders a `Vm` with no window and no read of this PC. `demo.rs` builds the made-up Vms
-(`main, first-run, updating, failed, done, noinfo, running, banner, all, empty`); `tests/shots.sh`
-renders all of them. A shot is limited to 64 million pixels.
+(`main, first-run, updating, failed, done, noinfo, running, banner, all, empty`, the notes and
+settings states, and the pointer states `hover-close hover-min hover-bar hover-primary
+pressed-primary hover-open hover-menu close-question close-question-yes close-question-no`);
+`tests/shots.sh`
+renders all of them. A shot is limited to 64 million pixels. `backdrop-mica` and
+`backdrop-acrylic` are the main window with its chrome keyed out over a stand-in backdrop
+(`frost::preview`); every other state is drawn with the backdrop off.
 
 ## bins/hub: glue.rs, work.rs, app.rs, cli.rs, trace.rs
 Written after the pieces above, by another hand; read here only for their headers, not reviewed
@@ -155,8 +175,16 @@ version (a closed or moved view drops it; the worker has cached it anyway). `Cmd
 fetches again from Failed only; `Cmd::NotesPage` opens the release page; Esc and `NotesClose` leave.
 `Vm.notes: Option<NotesVm>` makes `view::draw_full` draw the page instead of the command bar, list
 and pane; `Layout` reports `notes_max_scroll` and `notes_view_h` and new hits `Notes(i)`,
-`NotesBack`, `NotesRetry`, `NotesPage`. `app.rs` keeps the page's own scroll (the list's is kept
+`NotesBack`, `NotesRetry`, `NotesPage`, `NotesTrack`, `NotesThumb` (the thumb front-most), and
+`notes_bar` (track, thumb) as drawn. `app.rs` keeps the page's own scroll (the list's is kept
 while it is open): wheel, arrows, PageUp/PageDown/Space, Home/End (`changelog::scrolled`, pure).
+The scrollbar, from the last frame's `Layout` (pure, in `changelog.rs`): `bar_press` turns a press
+on the thumb into `Grab(dy)` (where it was taken) and one on the track off the thumb into a page
+toward it; `bar_drag` puts the thumb's top at pointer y less dy and turns that into the text's
+offset with the shared `scroll::offset_for_thumb`, clamped, None on a closed page or a non-finite
+number. `app.rs` holds `ngrab` from the press to the release (or the window losing focus), and
+sets `NotesVm.bar_active` before each frame while the pointer is on the bar or drags it: the
+shared bar is then drawn wide (as mdedit's).
 The page: header (back arrow, "Release notes of X", the version), the scrolling body in a column
 at most 740 px wide with the shared overlay scrollbar, a footer with `mdedit 1.2.0 -> 1.2.1`, the
 date and "Release page".
@@ -168,9 +196,10 @@ than the column cut by characters, runs of one style merged, inline code with a 
 (the layout kept for the text, width and scale), `draw_page`. A scroll frame walks the laid
 primitives and draws those in view. Limits: 20,000 lines, 3,000 blocks, 1,500 characters a line,
 300 lines a code block, 4,000 characters an item, depth 3. Shots: `notes`, `notes-loading`,
-`notes-failed`, `notes-nofile`, `notes-long`, list view only (the view does not depend on it).
-Not covered: a scrollbar drag or click (the thumb is drawn, the wheel and keys move the text),
-an image or a table drawn as a grid, a link that opens.
+`notes-failed`, `notes-nofile`, `notes-long`, `notes-bar-active` (the long page, its bar under
+the pointer), list view only (the view does not depend on it).
+Not covered: a track held down repeating its page, an image or a table drawn as a grid, a link
+that opens.
 
 ## tools/
 `write-hub-txt.ps1` writes a `hub.txt` from a version, app, repository, notes and a list of files
@@ -224,3 +253,18 @@ Never), About line and "Update Hub" (becomes "Restart now" once ready). The engi
 saves a change (`state.rs`); the tray menu changes the same settings and the card is rebuilt
 when its rows differ. Opened by the sliders button (`Hit::Settings`). Shots: `settings-general`,
 `settings-updates`, `settings-about` (the last over the banner state).
+"Window backdrop" (Off / Mica / Acrylic, General group, `state.rs` `backdrop`, off by default) is
+the shared `mdshared_app::backdrop::Backdrop`; the window follows it (`frost.rs` below).
+
+## frost.rs (bins/hub): the window backdrop
+Hub's part of the shared backdrop (D-033); the rest is `mdshared_ui::frost`. `view::draw_full`
+lists the chrome it drew in `Layout::chrome`: the title row, the command bar (not in the notes
+view) and the status bar. `app.rs` keeps a `Frost` per window and calls `Frost::sync` at the
+start of each frame with the setting, the window's focus and the palette (it asks
+`backdrop_available` and `set_backdrop` only when the setting or the focus changed; off, one
+comparison). While `Frost::key()` is `Some`, `mark_chrome` stamps the chrome's alpha byte after
+the view is drawn and before the row menu or the card, and `present` runs `key_out_areas` over the
+window's copy of the frame (the bitmap keeps what was drawn). A focus change redraws only when
+the setting concerns the frost. `preview` lays a keyed-out frame over a made-up stand-in for the
+shots `backdrop-mica` and `backdrop-acrylic`; `shot::render_with(.., Backdrop::Off)` is
+`render`.

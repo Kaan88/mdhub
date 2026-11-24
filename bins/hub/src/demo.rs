@@ -1,7 +1,8 @@
 //! Fake Vm states for the pictures and the tests: `hub --shot out.png --demo NAME`.
 //! Everything here is made up; nothing reads this PC.
+use crate::glue::close_question;
 use crate::settings;
-use crate::vm::{AppVm, Banner, NotesState, NotesVm, View, Vm};
+use crate::vm::{Act, AppVm, Banner, Hit, NotesState, NotesVm, Pointer, View, Vm};
 use hub_core::catalog::{CATALOG, CatalogApp};
 use hub_core::model::Row;
 
@@ -24,7 +25,31 @@ pub const NAMES: &[&str] = &[
     "notes-failed",
     "notes-nofile",
     "notes-long",
+    "notes-bar-active",
+    "hover-close",
+    "hover-min",
+    "hover-bar",
+    "hover-primary",
+    "pressed-primary",
+    "hover-open",
+    "hover-menu",
+    "close-question",
+    "close-question-yes",
+    "close-question-no",
+    "backdrop-mica",
+    "backdrop-acrylic",
 ];
+
+/// The window backdrop a demo's picture is drawn with: the main window with its chrome keyed
+/// out and laid over a stand-in for what the system would show (`frost::preview`).
+pub fn backdrop(name: &str) -> mdshared_app::backdrop::Backdrop {
+    use mdshared_app::backdrop::Backdrop;
+    match name {
+        "backdrop-mica" => Backdrop::Mica,
+        "backdrop-acrylic" => Backdrop::Acrylic,
+        _ => Backdrop::Off,
+    }
+}
 
 /// What a release notes file of mdedit 1.2.1 could look like: every construct the page reads.
 const SAMPLE_NOTES: &str = "# mdedit 1.2.1
@@ -191,6 +216,7 @@ fn vm(apps: Vec<AppVm>, sel: usize, view: View) -> Vm {
 pub fn build(name: &str, view: View) -> Option<Vm> {
     let r = Some;
     Some(match name {
+        "backdrop-mica" | "backdrop-acrylic" => build("main", view)?,
         "main" => vm(
             vec![
                 app("mdedit", Row::Update, r("1.2.0"), r("1.2.1"), false),
@@ -349,6 +375,7 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
                 tray: true,
                 notify: true,
                 interval_hours: 6,
+                backdrop: mdshared_app::backdrop::Backdrop::Off,
                 version: "0.1.0".into(),
                 hub_status: if about {
                     "Hub 0.2.0 is ready: restart to finish".into()
@@ -409,8 +436,10 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
         }
         "empty" => vm(Vec::new(), 0, view),
         // The release notes view of mdedit (1.2.0 installed, 1.2.1 the latest): loaded, still
-        // loading, failed (the one line stays), a release with no notes file, and a long one.
-        "notes" | "notes-loading" | "notes-failed" | "notes-nofile" | "notes-long" => {
+        // loading, failed (the one line stays), a release with no notes file, a long one, and the long
+        // one with its scrollbar active (the pointer on it).
+        "notes" | "notes-loading" | "notes-failed" | "notes-nofile" | "notes-long"
+        | "notes-bar-active" => {
             let mut v = build("main", view)?;
             let one = v.apps.first().map(|a| a.notes.clone()).unwrap_or_default();
             v.notes = Some(NotesVm {
@@ -426,10 +455,52 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
                         "Could not download the notes: connection timed out".into(),
                     ),
                     "notes-nofile" => NotesState::NoFile,
-                    "notes-long" => NotesState::Loaded(long_notes()),
+                    "notes-long" | "notes-bar-active" => NotesState::Loaded(long_notes()),
                     _ => NotesState::Loaded(SAMPLE_NOTES.to_string()),
                 },
+                // The long notes with the pointer on the scrollbar (or dragging its thumb).
+                bar_active: name == "notes-bar-active",
             });
+            v
+        }
+        // The main window with the pointer over one control: the window's close button (red),
+        // its minimize button, "Check now", "Update all" (and that one held down), a row's Open
+        // button and its "..." menu (the row under them lit as well).
+        "hover-close" | "hover-min" | "hover-bar" | "hover-primary" | "pressed-primary"
+        | "hover-open" | "hover-menu" => {
+            let mut v = build("main", view)?;
+            let hot = match name {
+                "hover-close" => Hit::Close,
+                "hover-min" => Hit::Min,
+                "hover-bar" => Hit::CheckNow,
+                "hover-primary" | "pressed-primary" => Hit::UpdateAll,
+                "hover-open" => Hit::Action(1, Act::Open),
+                _ => Hit::Menu(1),
+            };
+            if matches!(hot, Hit::Action(..) | Hit::Menu(_)) {
+                v.hover = Some(1);
+            }
+            v.pointer = Pointer {
+                hot,
+                held: if name == "pressed-primary" {
+                    hot
+                } else {
+                    Hit::None
+                },
+            };
+            v
+        }
+        // The question before an open app is closed for its update (Inbound is running in
+        // "main"): the bar alone, then with the pointer on its yes and on its no.
+        "close-question" | "close-question-yes" | "close-question-no" => {
+            let mut v = build("main", view)?;
+            v.banner = Some(close_question("Inbound"));
+            v.sel = 3;
+            v.pointer.hot = match name {
+                "close-question-yes" => Hit::BannerYes,
+                "close-question-no" => Hit::BannerNo,
+                _ => Hit::None,
+            };
             v
         }
         _ => return None,

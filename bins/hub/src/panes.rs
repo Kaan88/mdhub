@@ -60,6 +60,10 @@ pub fn draw(p: &mut Painter, pal: &Palette, r: Rect, vm: &Vm, lay: &mut Layout) 
             cy,
             ui::blue(pal),
         );
+        // A link: underlined while the pointer is over it.
+        if vm.pointer.over(Hit::Notes(vm.sel)) {
+            p.fill(Rect::new(lx, cy + 8.0, lw, px), ui::blue(pal));
+        }
         lay.hits.push((
             Rect::new(lx - 6.0, r.y + 2.0, lw + 34.0, PANE_TAB_H - 4.0),
             Hit::Notes(vm.sel),

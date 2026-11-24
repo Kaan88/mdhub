@@ -69,6 +69,44 @@ pub struct Vm {
     /// The release notes view: when it is Some, it takes the content area (the list and the pane
     /// are not drawn) until it is closed.
     pub notes: Option<NotesVm>,
+    /// What the pointer is over and what it holds down: the buttons draw their hover and press
+    /// from it. The shell keeps it; a demo sets it to show a hovered button.
+    pub pointer: Pointer,
+}
+
+/// The control under the pointer and the one the left button went down on (both `Hit::None`
+/// when there is none). A held control looks pressed only while the pointer is still over it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Pointer {
+    pub hot: Hit,
+    pub held: Hit,
+}
+
+impl Pointer {
+    /// Is the pointer over `h`?
+    pub fn over(&self, h: Hit) -> bool {
+        h != Hit::None && self.hot == h
+    }
+
+    /// Is `h` held down with the pointer still over it?
+    pub fn down(&self, h: Hit) -> bool {
+        self.over(h) && self.held == h
+    }
+
+    /// How the control `h` is to be drawn.
+    pub fn look(&self, h: Hit) -> Look {
+        Look {
+            hovered: self.over(h),
+            pressed: self.down(h),
+        }
+    }
+}
+
+/// A button's hover and press, as the drawing code takes them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Look {
+    pub hovered: bool,
+    pub pressed: bool,
 }
 
 /// Where the full release notes of the version Hub knows about are.
@@ -98,6 +136,9 @@ pub struct NotesVm {
     /// hub.txt `notes`: always there when the release has any.
     pub one_liner: String,
     pub state: NotesState,
+    /// The scrollbar is drawn active (wide): the pointer is on it or drags its thumb. The shell's
+    /// state, set before each frame; the engine leaves it false.
+    pub bar_active: bool,
 }
 
 /// What a row or tile's button does.
@@ -112,7 +153,7 @@ pub enum Act {
 }
 
 /// What a point on the window is.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Hit {
     /// Title row empty space: drag the window.
     Drag,
@@ -134,6 +175,8 @@ pub enum Hit {
     Menu(usize),
     BannerYes,
     BannerNo,
+    /// The offer bar's X: it means what its No button means, but it lights on its own.
+    BannerClose,
     /// The pane's "Release notes" link of row `i`.
     Notes(usize),
     /// The notes view's back arrow.
@@ -142,6 +185,10 @@ pub enum Hit {
     NotesRetry,
     /// The notes view's "GitHub": the release page in the browser.
     NotesPage,
+    /// The notes view's scrollbar: its track (a click pages toward it) and its thumb (dragged).
+    NotesTrack,
+    NotesThumb,
+    #[default]
     None,
 }
 
@@ -155,6 +202,12 @@ pub struct Layout {
     /// the view is not open), so the shell can clamp the wheel and move by pages.
     pub notes_max_scroll: f32,
     pub notes_view_h: f32,
+    /// The notes view's scrollbar as drawn, (track, thumb), when the text can scroll.
+    pub notes_bar: Option<(Rect, Rect)>,
+    /// The chrome as it was drawn: the title row, the command bar (not in the notes view) and the
+    /// status bar. What a window backdrop shows through (`frost.rs`); the list, the pane, the
+    /// offer bar and the notes page are not in it.
+    pub chrome: Vec<Rect>,
 }
 
 impl Layout {

@@ -11,7 +11,7 @@
 //! Layout is done once per (text, width, scale) and kept (`laid`), so a scroll frame only walks
 //! the laid primitives and draws the ones in view.
 use crate::ui::{self, blue, red};
-use crate::vm::{Hit, Layout, NotesState, NotesVm};
+use crate::vm::{Hit, Layout, NotesState, NotesVm, Pointer};
 use mdshared_ui::gfx::{Face, Painter, Rect, Rgb, mix};
 use mdshared_ui::scroll;
 use mdshared_ui::theme::Palette;
@@ -1040,6 +1040,7 @@ pub fn draw_page(
     r: Rect,
     n: &NotesVm,
     scroll: f32,
+    ptr: &Pointer,
     lay: &mut Layout,
 ) {
     let px = p.px().max(1.0);
@@ -1050,9 +1051,7 @@ pub fn draw_page(
     p.fill(head, pal.pane);
     p.fill(Rect::new(head.x, head.bottom() - px, head.w, px), pal.line);
     let back = Rect::new(head.x + 10.0, head.y + (head.h - 32.0) / 2.0, 32.0, 32.0);
-    if let Some(fill) = mdshared_ui::chrome::button_fill(pal, false, false, false, false) {
-        p.rbox(back, 6.0, fill);
-    }
+    ui::quiet_fill(p, pal, back, 6.0, ptr.look(Hit::NotesBack));
     p.icon(BACK_ICON, 15.0, back.cx(), back.cy(), pal.text);
     lay.hits.push((back, Hit::NotesBack));
     let tx = back.right() + 12.0;
@@ -1083,7 +1082,8 @@ pub fn draw_page(
     p.fill(Rect::new(foot.x, foot.y, foot.w, px), pal.line);
     let fy = foot.cy();
     let old = p.clip(foot);
-    let page = ui::sbtn_r(p, pal, foot.right() - 14.0, fy, "Release page", false, true);
+    let look = ptr.look(Hit::NotesPage);
+    let page = ui::sbtn_r(p, pal, foot.right() - 14.0, fy, "Release page", false, look);
     lay.hits.push((page, Hit::NotesPage));
     let mut line = version_line(n);
     if !n.date.is_empty() {
@@ -1161,14 +1161,18 @@ pub fn draw_page(
     }
     if matches!(n.state, NotesState::Failed(_)) {
         let by = ex_top + extra_h - 28.0 + 14.0;
-        let b = ui::sbtn(p, pal, cx, by, "Try again", true, true);
+        let b = ui::sbtn(p, pal, cx, by, "Try again", true, ptr.look(Hit::NotesRetry));
         if let Some(v) = ui::intersect(b, body) {
             lay.hits.push((v, Hit::NotesRetry));
         }
     }
     p.restore(old);
     if let Some((track, thumb)) = scroll::scrollbar(body, content, body.h, scroll) {
-        scroll::draw_scrollbar(p, pal, track, thumb, false);
+        scroll::draw_scrollbar(p, pal, track, thumb, n.bar_active);
+        // The thumb after the track: it is the front-most of the two.
+        lay.hits.push((track, Hit::NotesTrack));
+        lay.hits.push((thumb, Hit::NotesThumb));
+        lay.notes_bar = Some((track, thumb));
     }
 }
 
@@ -1202,6 +1206,69 @@ pub fn scrolled(nav: Nav, cur: f32, max: f32, view: f32) -> f32 {
         Nav::End => max,
     };
     next.clamp(0.0, max)
+}
+
+// ---- the scrollbar under the pointer -----------------------------------------------------------
+
+/// What a press on the notes page's scrollbar does.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum BarPress {
+    /// The thumb was taken this far below its top: the drag keeps it there under the pointer.
+    Grab(f32),
+    /// The track was clicked off the thumb: the text is now at this offset, a page toward it.
+    Page(f32),
+}
+
+/// A press at (`x`, `y`) on the page last drawn into `lay`, the text at `cur`: what it does to the
+/// scrollbar, or None when it is not on it (or the text cannot scroll).
+pub fn bar_press(lay: &Layout, x: f32, y: f32, cur: f32) -> Option<BarPress> {
+    let (_, thumb) = lay.notes_bar?;
+    if !y.is_finite() {
+        return None;
+    }
+    match lay.at(x, y) {
+        Hit::NotesThumb => Some(BarPress::Grab(y - thumb.y)),
+        Hit::NotesTrack => {
+            let nav = if y < thumb.y {
+                Nav::PageUp
+            } else if y >= thumb.bottom() {
+                Nav::PageDown
+            } else {
+                return None;
+            };
+            Some(BarPress::Page(scrolled(
+                nav,
+                cur,
+                lay.notes_max_scroll,
+                lay.notes_view_h,
+            )))
+        }
+        _ => None,
+    }
+}
+
+/// The text's offset while the thumb, taken `grab` below its top, is under a pointer at `y`:
+/// proportional to where the thumb is on its track, clamped to `0..=max`. None when there is no bar
+/// (the page closed or stopped scrolling) or the numbers are not finite.
+pub fn bar_drag(lay: &Layout, grab: f32, y: f32) -> Option<f32> {
+    let (track, thumb) = lay.notes_bar?;
+    let to = y - grab;
+    let (max, view) = (lay.notes_max_scroll, lay.notes_view_h);
+    if !to.is_finite() || !max.is_finite() || !view.is_finite() {
+        return None;
+    }
+    let max = max.max(0.0);
+    let at = scroll::offset_for_thumb(track, thumb.h, to, max + view, view);
+    Some(if at.is_finite() {
+        at.clamp(0.0, max)
+    } else {
+        0.0
+    })
+}
+
+/// The pointer at (`x`, `y`) is on the scrollbar (track or thumb).
+pub fn on_bar(lay: &Layout, x: f32, y: f32) -> bool {
+    matches!(lay.at(x, y), Hit::NotesTrack | Hit::NotesThumb)
 }
 
 #[cfg(test)]

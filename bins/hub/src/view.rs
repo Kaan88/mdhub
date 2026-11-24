@@ -5,7 +5,7 @@ use crate::changelog;
 use crate::grid;
 use crate::panes;
 use crate::ui::{self, amber, blue, green, red};
-use crate::vm::{Act, AppVm, Hit, Layout, View, Vm};
+use crate::vm::{Act, AppVm, Hit, Layout, Look, Pointer, View, Vm};
 use hub_core::model::Row;
 use mdshared_ui::chrome::{
     BAR_H, TITLE_H, WIN_BTN_W, WinButton, button_fill, draw_win_button, win_button_rect,
@@ -196,9 +196,11 @@ pub fn draw_full(
     } else {
         0.0
     };
-    title(p, pal, w, &mut lay);
+    title(p, pal, w, &vm.pointer, &mut lay);
+    lay.chrome.push(Rect::new(0.0, 0.0, w, TITLE_H));
     if vm.notes.is_none() {
         command_bar(p, pal, w, vm, &mut lay);
+        lay.chrome.push(Rect::new(0.0, TITLE_H, w, BAR_H));
     }
     if let Some(b) = &vm.banner {
         let r = Rect::new(0.0, TITLE_H + BAR_H, w, BANNER_H);
@@ -210,12 +212,12 @@ pub fn draw_full(
             &ui::cap(&b.text, 300),
             &ui::cap(&b.yes, 40),
             &ui::cap(&b.no, 40),
-            OfferBarState::default(),
+            offer_state(&vm.pointer),
         );
         for (rect, hit) in [
             (hits.yes, Hit::BannerYes),
             (hits.no, Hit::BannerNo),
-            (hits.close, Hit::BannerNo),
+            (hits.close, Hit::BannerClose),
         ] {
             if let Some(rect) = rect {
                 lay.hits.push((rect, hit));
@@ -232,6 +234,7 @@ pub fn draw_full(
             Rect::new(0.0, top, w, bottom - top),
             n,
             notes_scroll,
+            &vm.pointer,
             &mut lay,
         );
     } else {
@@ -244,13 +247,9 @@ pub fn draw_full(
             panes::draw(p, pal, geo.pane, vm, &mut lay);
         }
     }
-    status_bar(
-        p,
-        pal,
-        Rect::new(0.0, geo.status_y, w, STATUS_H.min(h)),
-        w,
-        vm,
-    );
+    let status = Rect::new(0.0, geo.status_y, w, STATUS_H.min(h));
+    status_bar(p, pal, status, w, vm);
+    lay.chrome.push(status);
     lay
 }
 
@@ -269,7 +268,7 @@ fn empty(p: &mut Painter, pal: &Palette, r: Rect) {
 
 // ---- the title row ----------------------------------------------------------------------------
 
-fn title(p: &mut Painter, pal: &Palette, w: f32, lay: &mut Layout) {
+fn title(p: &mut Painter, pal: &Palette, w: f32, ptr: &Pointer, lay: &mut Layout) {
     p.fill(Rect::new(0.0, 0.0, w, TITLE_H), pal.title);
     let right = (w - 3.0 * WIN_BTN_W).max(0.0);
     let drag = Rect::new(0.0, 0.0, right, TITLE_H);
@@ -303,13 +302,15 @@ fn title(p: &mut Painter, pal: &Palette, w: f32, lay: &mut Layout) {
     .enumerate()
     {
         let b = win_button_rect(w, n);
-        draw_win_button(p, pal, kind, b, false, false, false);
+        let look = ptr.look(hit);
+        draw_win_button(p, pal, kind, b, false, look.hovered, look.pressed);
         lay.hits.push((b, hit));
     }
 }
 
 // ---- the command bar --------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)] // a button: where, its icon and words, and its look
 fn bar_button(
     p: &mut Painter,
     pal: &Palette,
@@ -318,12 +319,13 @@ fn bar_button(
     g: &str,
     label: &str,
     enabled: bool,
+    look: Look,
 ) -> Rect {
     let cy = y + 16.0;
     let w = 44.0 + p.measure(Face::Ui, 13.0, label);
     let b = Rect::new(x, y, w, 32.0);
-    if let Some(fill) = button_fill(pal, false, false, false, false).filter(|_| enabled) {
-        p.rbox(b, 6.0, fill);
+    if enabled {
+        ui::quiet_fill(p, pal, b, 6.0, look);
     }
     let color = if enabled { pal.text } else { pal.faint };
     p.icon(g, 15.0, x + 18.0, cy, color);
@@ -331,11 +333,19 @@ fn bar_button(
     b
 }
 
-fn primary_button(p: &mut Painter, pal: &Palette, x: f32, y: f32, g: &str, label: &str) -> Rect {
+fn primary_button(
+    p: &mut Painter,
+    pal: &Palette,
+    x: f32,
+    y: f32,
+    g: &str,
+    label: &str,
+    look: Look,
+) -> Rect {
     let cy = y + 16.0;
     let wd = 44.0 + p.measure(Face::Semibold, 13.0, label);
     let b = Rect::new(x, y, wd, 32.0);
-    p.rbox(b, 6.0, pal.accent);
+    p.rbox(b, 6.0, ui::accent_fill(pal, look));
     p.icon(g, 14.0, x + 18.0, cy, pal.on_accent);
     p.text(
         Face::Semibold,
@@ -357,9 +367,7 @@ fn command_bar(p: &mut Painter, pal: &Palette, w: f32, vm: &Vm, lay: &mut Layout
     // The right group first, so the left one knows how much room it has.
     // The sliders button (settings) is the last thing on the right.
     let gear = Rect::new(w - 8.0 - 32.0, y, 32.0, 32.0);
-    if let Some(fill) = button_fill(pal, false, false, false, false) {
-        p.rbox(gear, 6.0, fill);
-    }
+    ui::quiet_fill(p, pal, gear, 6.0, vm.pointer.look(Hit::Settings));
     p.icon(glyph::SLIDERS, 15.0, gear.cx(), cy, pal.text);
     lay.hits.push((gear, Hit::Settings));
     let seg = 30.0;
@@ -375,11 +383,12 @@ fn command_bar(p: &mut Painter, pal: &Palette, w: f32, vm: &Vm, lay: &mut Layout
     {
         let b = Rect::new(sr.x + 1.0 + k as f32 * seg, y + 1.0, seg, 30.0);
         let on = vm.view == v;
-        if on {
+        let look = vm.pointer.look(Hit::ViewSwitch(v));
+        if let Some(fill) = button_fill(pal, look.hovered, look.pressed, on, false) {
             p.rbox(
                 Rect::new(b.x + 2.0, b.y + 2.0, b.w - 4.0, b.h - 4.0),
                 4.0,
-                pal.on,
+                fill,
             );
         }
         p.icon(
@@ -439,7 +448,8 @@ fn command_bar(p: &mut Painter, pal: &Palette, w: f32, vm: &Vm, lay: &mut Layout
     };
     let mut x = 8.0;
     if let Some(t) = &vm.busy {
-        let b = bar_button(p, pal, x, y, glyph::CLOSE, "Cancel all", true);
+        let look = vm.pointer.look(Hit::CancelAll);
+        let b = bar_button(p, pal, x, y, glyph::CLOSE, "Cancel all", true, look);
         lay.hits.push((b, Hit::CancelAll));
         x += b.w + 2.0;
         x += sep(p, x);
@@ -461,6 +471,7 @@ fn command_bar(p: &mut Painter, pal: &Palette, w: f32, vm: &Vm, lay: &mut Layout
                 y,
                 glyph::DOWNLOAD,
                 &format!("Update all ({})", vm.updates),
+                vm.pointer.look(Hit::UpdateAll),
             );
             lay.hits.push((b, Hit::UpdateAll));
             x += b.w + 6.0;
@@ -479,6 +490,7 @@ fn command_bar(p: &mut Painter, pal: &Palette, w: f32, vm: &Vm, lay: &mut Layout
                 "Check now"
             },
             !checking,
+            vm.pointer.look(Hit::CheckNow),
         );
         if !checking {
             lay.hits.push((b, Hit::CheckNow));
@@ -808,10 +820,25 @@ fn row(
     }
     // Actions, from the right.
     let mut ax = rr.right() - 12.0;
+    let ground = if sel {
+        pal.on
+    } else if vm.hover == Some(i) {
+        pal.hover
+    } else {
+        pal.page
+    };
+    ui::icon_fill(
+        p,
+        pal,
+        Rect::new(ax - 24.0, cy - 14.0, 28.0, 28.0),
+        ground,
+        vm.pointer.look(Hit::Menu(i)),
+    );
     p.icon(glyph::MORE, 15.0, ax - 10.0, cy, pal.muted);
     ax -= 32.0;
     for b in row_actions(a) {
-        let r = ui::sbtn_r(p, pal, ax, cy, b.label, b.primary, true);
+        let look = vm.pointer.look(Hit::Action(i, b.act));
+        let r = ui::sbtn_r(p, pal, ax, cy, b.label, b.primary, look);
         ax = r.x - 6.0;
     }
 }
@@ -847,4 +874,15 @@ fn status_bar(p: &mut Painter, pal: &Palette, r: Rect, w: f32, vm: &Vm) {
         (w - 30.0 - rw - 30.0).max(0.0),
     );
     p.restore(old);
+}
+
+/// The offer bar's buttons as the pointer has them.
+fn offer_state(ptr: &Pointer) -> OfferBarState {
+    OfferBarState {
+        yes_hovered: ptr.over(Hit::BannerYes),
+        yes_pressed: ptr.down(Hit::BannerYes),
+        no_hovered: ptr.over(Hit::BannerNo),
+        no_pressed: ptr.down(Hit::BannerNo),
+        close_hovered: ptr.over(Hit::BannerClose),
+    }
 }
