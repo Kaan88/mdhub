@@ -298,3 +298,11 @@ window keyed out exactly as the present does, laid over a made-up stand-in (a bl
 diagonal), to show which regions let it through. They are not what Windows draws.
 Would change: the owner wanting the pane or the list frosted too (then `Layout::chrome` gains
 them); a light Hub wanting no backdrop at all; shared changing which regions it calls chrome.
+
+## D-034 The settings card is one page, with no category list
+The owner (2026-11-24, from a picture of 0.1.4's card): "remove categories ... everything fix in one
+page." The card uses the shared form's `single_page()`: General, Updates and About stay as headings
+in the body, there is no list on the left, and the card is 600 px wide. Opening it at a group
+(`settings::form`'s `page`, the tray's way in) scrolls to that heading, which on a card that fits
+whole changes nothing. Replaces D-023, whose list marked a group but swapped no page. Would change:
+the card growing past one screen, where a list to jump with earns its room again.

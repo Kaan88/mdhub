@@ -4,12 +4,13 @@ Rewritten, never appended to. What is true now; `git log` is the story.
 
 ## Released
 
-v0.1.0 (2026-11-22), v0.1.1, v0.1.2, v0.1.3 (2026-11-23), v0.1.4 (2026-11-24), `Kaan88/mdhub`:
+v0.1.0 (2026-11-22), v0.1.1, v0.1.2, v0.1.3 (2026-11-23), v0.1.4, v0.1.5 (2026-11-24), `Kaan88/mdhub`:
 `Hub-Setup-<v>.exe`, `hub.exe`, `hub-update.txt`, `hub.txt`; `ci` and `release` passed for each. The owner ran the
 installer and the self-update 0.1.0 to 0.1.1 (2026-11-23): both worked. 0.1.3 has six apps. 0.1.2's
 fix for updating an open Inbound or Sprawl (D-029) is not yet confirmed on the owner's PC.
 0.1.4 brings hover and press (D-032), the notes scrollbar's drag and the window backdrop (D-033),
-three branches merged on `release/0.1.4`; none of the three was tried in a real window.
+three branches merged on `release/0.1.4`; none of the three was tried in a real window. 0.1.5
+makes the settings card one page with no category list (D-034).
 
 ## On `main`, committed
 
@@ -106,7 +107,6 @@ three branches merged on `release/0.1.4`; none of the three was tried in a real 
 ## Known wrong, or at risk
 
 - Closing the window leaves the tray at 5 to 6 MiB, not the 2.9 MiB it started with (in budget).
-- The settings card's category list marks a group but shows all three at once (D-023).
 - The close question's warning is weak: the shared offer bar draws its sign in muted grey on the
   ordinary bar colour, and it still appears at once. A warning-tinted bar (`pal.warn_bg`) needs an
   opt-in variant in `markdown-shared-rs`; not built, the owner decides.
