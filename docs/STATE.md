@@ -4,10 +4,12 @@ Rewritten, never appended to. What is true now; `git log` is the story.
 
 ## Released
 
-v0.1.0 (2026-11-22), v0.1.1, v0.1.2 and v0.1.3 (2026-11-23), `Kaan88/mdhub`: `Hub-Setup-<v>.exe`,
-`hub.exe`, `hub-update.txt`, `hub.txt`; `ci` and `release` passed for each. The owner ran the
+v0.1.0 (2026-11-22), v0.1.1, v0.1.2, v0.1.3 (2026-11-23), v0.1.4 (2026-11-24), `Kaan88/mdhub`:
+`Hub-Setup-<v>.exe`, `hub.exe`, `hub-update.txt`, `hub.txt`; `ci` and `release` passed for each. The owner ran the
 installer and the self-update 0.1.0 to 0.1.1 (2026-11-23): both worked. 0.1.3 has six apps. 0.1.2's
 fix for updating an open Inbound or Sprawl (D-029) is not yet confirmed on the owner's PC.
+0.1.4 brings hover and press (D-032), the notes scrollbar's drag and the window backdrop (D-033),
+three branches merged on `release/0.1.4`; none of the three was tried in a real window.
 
 ## On `main`, committed
 
@@ -54,14 +56,11 @@ fix for updating an open Inbound or Sprawl (D-029) is not yet confirmed on the o
   `notes.file` is one GET (64 KiB, 10 s) only when the view is opened, kept on disk by app and
   version; loading, loaded, failed (reason, Try again) and no file are drawn. The scrollbar's thumb
   drags, a track click pages toward it, the bar widens under the pointer (`notes-bar-active`).
-- Verified 2026-11-24, each branch on its own: the notes scrollbar drag (165 + 201 + 2 tests, 180
-  shots) and hover and press (165 + 201 + 2, 296 shots, both themes looked at) and the backdrop (166 + 202 + 2,
-  200 shots, each backdrop test failing with its fix reverted); fmt and both
-  clippies clean on each. The merged release is verified below it. The whole repository 2026-11-22.
-- Reviewed 2026-11-22, the whole repository: 36 safety rules were removed one at a time (hash and
-  size checks, URL pins, the Run value's quoting, asking before closing, one install at a time);
-  33 failed a test, 2 had none and got one, 1 is covered by a second check. 200,000 mutated
-  manifests, ini files and roll back notes: no panic. The defects found are fixed (`git log`).
+- Verified 2026-11-24, the three merged for 0.1.4: `cargo fmt --all --check` clean; clippy
+  `-D warnings` clean, workspace and `-p hub --features test-hooks`; `cargo test --release
+  --workspace` 174 (hub, 1 ignored) + 202 (hub-core, 1 ignored) + 2 (samples) passed;
+  `tests/shots.sh` 324 PNGs twice, byte-identical, `shots-check` 0 bad; the backdrop and hover
+  shots looked at in both themes; each branch verified alone before. The repository 2026-11-22.
 - Budgets measured (release, `--behind`, fresh `HUB_DATA`, 11 runs unless noted):
   | | now | budget | before the tray work |
   |---|---|---|---|
@@ -72,12 +71,11 @@ fix for updating an open Inbound or Sprawl (D-029) is not yet confirmed on the o
   | window open during the cycles | 9.4 to 10.2 MiB | < 30 MiB | none |
   | idle CPU over 10 s, tray only / window open | 0 ms / 0 ms | none | 0 |
   | exe size | 3,441,664 bytes (after the icon and the fixes) | none | 3.18 MB |
-  With the notes view (7 runs, `--demo main`): first frame 57.9 to 66.3 ms (median 59.5), private
-  memory 9.5 to 9.6 MiB; a 64 KiB notes file lays out in 31 ms once, a scroll frame draws in
-  0.16 ms from the kept layout. With hover and press (7 runs, 2026-11-24): first frame median
-  53.8 ms, 51.6 to 61.0; private 9.5 to 9.6 MiB; 0 ms CPU at rest. With the backdrop
-  (11 runs, interleaved): median 60.9 ms against 62.0 before; the frosted path not timed (a
-  `--behind` window has no focus). Unmeasured: tray-only memory
+  A 64 KiB notes file lays out in 31 ms once, a scroll frame in 0.16 ms. 0.1.4 against `b432ad4`
+  (0.1.3), 14 runs each, interleaved: first frame median 70.8 ms against 61.8 (58.6 to 93.4 against
+  55.9 to 96.0), the PC's load: 5 more pairs' stage times match (first frame drawn 52.0 to 62.6
+  against 51.8 to 54.3). Private 9.4 to 9.5 MiB in both; exe 3,674,624 bytes against 3,651,584. The
+  frosted path is not timed (a `--behind` window has no focus). Unmeasured: tray-only memory
   since the tray work, a real window-first start, a real network fetch.
 
 ## What does not exist
