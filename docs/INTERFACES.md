@@ -39,7 +39,8 @@ Fixed already (do not change signatures without saying so in your report): `cata
   (parts are made safe: no device names, no trailing dots).
 - Settings (`settings.ini`, a tiny reader in state.rs):
   `view() -> ViewMode` (`ViewMode::{List, Large, Small}` in hub-core; `vm::View` in bins/hub is
-  mapped from it), `interval_hours` (default 6, 0 = never).
+  mapped from it), `interval_hours` (default 6, 0 = never), `backdrop() -> Backdrop` (the shared
+  `mdshared_app::backdrop::Backdrop`, key `backdrop`, default `Off`) and `set_backdrop`.
 - Every read-modify-write of an ini holds a lock file `<dir>\.hub.lock`, so the tray and the
   window cannot lose each other's change; temp files are named per process and write.
 - AS BUILT, detect: the exe's own version resource wins over Hub's record and DisplayVersion.

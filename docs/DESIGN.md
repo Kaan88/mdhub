@@ -53,7 +53,7 @@ m`; the tests and the samples use it).
 ## state.rs
 `Store {dir}`, `Store::open()` (`$HUB_DATA`, else `%LOCALAPPDATA%\Hub`; created on demand),
 `Store::at(dir)` for tests. `installed.ini` (a section per app: folder, exe, version, kind, date),
-`settings.ini` (`view`, `interval_hours` default 6, `[skipped]`), `checks.ini` (last attempt,
+`settings.ini` (`view`, `interval_hours` default 6, `backdrop` default off, `[skipped]`), `checks.ini` (last attempt,
 failure count), `latest\<id>.txt` (the cached manifest text, so the window has rows with no
 network), `cache\<id>-<version>` and a `rollback_dir`. Every read-modify-write holds
 `.hub.lock`, a stale lock is broken, temp files are named per process and write, and writes
@@ -142,7 +142,9 @@ NAME]` renders a `Vm` with no window and no read of this PC. `demo.rs` builds th
 settings states, and the pointer states `hover-close hover-min hover-bar hover-primary
 pressed-primary hover-open hover-menu close-question close-question-yes close-question-no`);
 `tests/shots.sh`
-renders all of them. A shot is limited to 64 million pixels.
+renders all of them. A shot is limited to 64 million pixels. `backdrop-mica` and
+`backdrop-acrylic` are the main window with its chrome keyed out over a stand-in backdrop
+(`frost::preview`); every other state is drawn with the backdrop off.
 
 ## bins/hub: glue.rs, work.rs, app.rs, cli.rs, trace.rs
 Written after the pieces above, by another hand; read here only for their headers, not reviewed
@@ -251,3 +253,18 @@ Never), About line and "Update Hub" (becomes "Restart now" once ready). The engi
 saves a change (`state.rs`); the tray menu changes the same settings and the card is rebuilt
 when its rows differ. Opened by the sliders button (`Hit::Settings`). Shots: `settings-general`,
 `settings-updates`, `settings-about` (the last over the banner state).
+"Window backdrop" (Off / Mica / Acrylic, General group, `state.rs` `backdrop`, off by default) is
+the shared `mdshared_app::backdrop::Backdrop`; the window follows it (`frost.rs` below).
+
+## frost.rs (bins/hub): the window backdrop
+Hub's part of the shared backdrop (D-033); the rest is `mdshared_ui::frost`. `view::draw_full`
+lists the chrome it drew in `Layout::chrome`: the title row, the command bar (not in the notes
+view) and the status bar. `app.rs` keeps a `Frost` per window and calls `Frost::sync` at the
+start of each frame with the setting, the window's focus and the palette (it asks
+`backdrop_available` and `set_backdrop` only when the setting or the focus changed; off, one
+comparison). While `Frost::key()` is `Some`, `mark_chrome` stamps the chrome's alpha byte after
+the view is drawn and before the row menu or the card, and `present` runs `key_out_areas` over the
+window's copy of the frame (the bitmap keeps what was drawn). A focus change redraws only when
+the setting concerns the frost. `preview` lays a keyed-out frame over a made-up stand-in for the
+shots `backdrop-mica` and `backdrop-acrylic`; `shot::render_with(.., Backdrop::Off)` is
+`render`.

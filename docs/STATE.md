@@ -5,12 +5,9 @@ Rewritten, never appended to. What is true now; `git log` is the story.
 ## Released
 
 v0.1.0 (2026-11-22), v0.1.1, v0.1.2 and v0.1.3 (2026-11-23), `Kaan88/mdhub`: `Hub-Setup-<v>.exe`,
-`hub.exe`, `hub-update.txt`, `hub.txt`; `ci` and the release workflow passed on GitHub for each. The
-owner ran the installer and the self-update from 0.1.0 to 0.1.1 on their PC (2026-11-23): both
-worked. 0.1.3 is the first release whose catalog has six apps (Purge D-030, Barbican D-031). Not yet
-run by hand: an elevated setup (Sprawl, Purge), an app updated while open, Explorer restarting under
-the tray, the balloon and the tray menu seen live. 0.1.1 could not update Inbound or Sprawl while
-they ran (no window to close); 0.1.2 has the fix (D-029), not yet confirmed on the owner's PC.
+`hub.exe`, `hub-update.txt`, `hub.txt`; `ci` and `release` passed for each. The owner ran the
+installer and the self-update 0.1.0 to 0.1.1 (2026-11-23): both worked. 0.1.3 has six apps. 0.1.2's
+fix for updating an open Inbound or Sprawl (D-029) is not yet confirmed on the owner's PC.
 
 ## On `main`, committed
 
@@ -18,14 +15,11 @@ they ran (no window to close); 0.1.2 has the fix (D-029), not yet confirmed on t
   parser and writer plus the legacy stopgap, Hub's own files (`state.rs`), detection, checking,
   transport, installing, and the tray work: `autostart` (Run key), `selfupdate` (Hub's own update),
   `notify` (balloon text and memory).
-- Purge: per-machine Inno (`Program Files\Purge`), `Purge.exe`, `wait` `purge-engine.exe` and
-  `purge-broker.exe`, `setup_closes_app`; its v0.1.0 release already carries `hub.txt`, so its row
-  shows a real version. Barbican: per-user Inno, `barbican.exe`, `setup_closes_app`; **no release**
-  yet (its installer is in its own repository, unreleased), so its row shows "no release
-  information" and Hub offers no install for it.
-- `crates/hub-core/tests/samples.rs`: every catalog app with a release parses its
-  `tools/samples/<id>/hub.txt` and round-trips it; `NO_SAMPLE` names the one app without a release
-  (Barbican) and the test fails if that app gains a sample, or if a listed id leaves the catalog.
+- Purge: per-machine Inno, `wait` `purge-engine.exe` and `purge-broker.exe`, `setup_closes_app`;
+  its v0.1.0 carries `hub.txt`. Barbican: per-user Inno, `setup_closes_app`; **no release** yet, so
+  its row shows "no release information" and Hub offers no install for it.
+- `crates/hub-core/tests/samples.rs`: each released app's `tools/samples/<id>/hub.txt` parses and
+  round-trips; `NO_SAMPLE` names Barbican, and the test fails if it gains a sample.
 - `bins/hub`: the window (`app`, winit + softbuffer, created on demand), its engine (`glue`),
   workers (`work`), `cli`, drawing (`vm view grid panes ui`), `--shot` and `demo`, and the tray
   work: `tray` (icon, system menu, balloon, on a thread of its own), `icon` (the icon and badge
@@ -41,19 +35,19 @@ they ran (no window to close); 0.1.2 has the fix (D-029), not yet confirmed on t
 - The icon (D-024): a white hub and four nodes in the apps' colours on a dark tile, drawn only
   in `icon.rs`; `assets/hub.ico` is packed from it by `tools/make-icon.ps1`. The four nodes were
   not redrawn when the catalog grew to six (D-031).
-- The apps' own icons (D-027): list, large and small views draw each app's own icon, one 128 px
-  PNG in `assets/apps/<id>.png` (mdedit, mdview from their .ico's 128 frame; Sprawl, Inbound from
-  their 256 px PNG; Purge from its .ico's 256 frame; Barbican's own 128 px; downscaled where
-  larger), decoded on the first draw, scaled once per size. The catalog `tile`/`glyph` draw only
-  when an icon does not decode.
+- The apps' own icons (D-027): one 128 px PNG each in `assets/apps/<id>.png`, decoded on the first
+  draw, scaled once per size; the catalog `tile`/`glyph` draw only when an icon does not decode.
 - Closing an app (D-025, D-026): the offer bar's yes covers one install; a roll back of an open
   app is not started; a question with no window opens the window.
-- Settings card: start with Windows, tray, notifications, check interval, update Hub.
-- Hover and press (D-032, branch `claude/hover-and-close-warning-9d76a7`, not yet on `main`):
-  every button lights under the pointer and darkens while held (window buttons, command bar,
-  view switch, offer bar and its X, row and tile buttons, "..." menus, notes page buttons; the
-  "Release notes" link underlines); redrawn only when the control under the pointer changes. The
-  "close it and update" question is a warning (`warn: true`, the warning sign on the bar).
+- Settings card: start with Windows, tray, notifications, backdrop, check interval, update Hub.
+- Hover and press (D-032): every button lights under the pointer and darkens while held (window
+  buttons, command bar, view switch, offer bar and its X, row and tile buttons, "..." menus, notes
+  page buttons; the "Release notes" link underlines); redrawn only when the control under the
+  pointer changes. The "close it and update" question is a warning (`warn: true`).
+- Window backdrop (D-033): Off, Mica, Acrylic, `[settings] backdrop`, Off by default, the shared
+  `Backdrop` and `Frost`. Frosted: the title row, the command bar, the status bar, only while the
+  window has focus; the list and the pane stay opaque. Off draws byte for byte as before. Demos
+  `backdrop-mica`, `backdrop-acrylic` show it over a made-up gradient, not what Windows draws.
 - The release notes view (D-028): a page for the selected app's latest version with
   `mdedit 1.2.0 -> 1.2.1` and its date under the text; from the row menu, the pane's "Release
   notes" link and the key `n`; Esc, Backspace or the arrow go back. `notes` shows at once;
@@ -61,7 +55,8 @@ they ran (no window to close); 0.1.2 has the fix (D-029), not yet confirmed on t
   version; loading, loaded, failed (reason, Try again) and no file are drawn. The scrollbar's thumb
   drags, a track click pages toward it, the bar widens under the pointer (`notes-bar-active`).
 - Verified 2026-11-24, each branch on its own: the notes scrollbar drag (165 + 201 + 2 tests, 180
-  shots) and hover and press (165 + 201 + 2, 296 shots, both themes looked at); fmt and both
+  shots) and hover and press (165 + 201 + 2, 296 shots, both themes looked at) and the backdrop (166 + 202 + 2,
+  200 shots, each backdrop test failing with its fix reverted); fmt and both
   clippies clean on each. The merged release is verified below it. The whole repository 2026-11-22.
 - Reviewed 2026-11-22, the whole repository: 36 safety rules were removed one at a time (hash and
   size checks, URL pins, the Run value's quoting, asking before closing, one install at a time);
@@ -80,7 +75,9 @@ they ran (no window to close); 0.1.2 has the fix (D-029), not yet confirmed on t
   With the notes view (7 runs, `--demo main`): first frame 57.9 to 66.3 ms (median 59.5), private
   memory 9.5 to 9.6 MiB; a 64 KiB notes file lays out in 31 ms once, a scroll frame draws in
   0.16 ms from the kept layout. With hover and press (7 runs, 2026-11-24): first frame median
-  53.8 ms, 51.6 to 61.0; private 9.5 to 9.6 MiB; 0 ms CPU at rest. Unmeasured: tray-only memory
+  53.8 ms, 51.6 to 61.0; private 9.5 to 9.6 MiB; 0 ms CPU at rest. With the backdrop
+  (11 runs, interleaved): median 60.9 ms against 62.0 before; the frosted path not timed (a
+  `--behind` window has no focus). Unmeasured: tray-only memory
   since the tray work, a real window-first start, a real network fetch.
 
 ## What does not exist
@@ -95,6 +92,9 @@ they ran (no window to close); 0.1.2 has the fix (D-029), not yet confirmed on t
   page, the scrollbar's drag, track click and hover) is compiled and read, not run; the arithmetic
   under it (`changelog::bar_press`, `bar_drag`) is tested. The links are not clickable.
 - The window made because the offer bar asks (D-025): its wiring in `app.rs` has no test.
+- The backdrop seen live: Mica or Acrylic behind a focused Hub window has not been looked at, and
+  the wiring in `app.rs` (sync on focus and on the setting, the key-out at present, the reset for
+  a new window) is compiled and read, not covered by a test.
 - A use for the manifest's `.min`, `.uninstall` and `.updates`: they are parsed and ignored.
 - "Swap at next start" for a downloaded Hub: it is swapped at "Restart now" or at quit, else
   deleted by `clean_up` at the next start and fetched again.
@@ -139,11 +139,12 @@ they ran (no window to close); 0.1.2 has the fix (D-029), not yet confirmed on t
   passes, six defects fixed with tests (`48a9005` to `1f1a161`), 36 safety rules mutation-checked,
   200,000 fuzzed inputs, the FFI read for leaks.
 - Not reviewed by a second model: the apps' icons, the notes page, the bumps, the Purge and
-  Barbican entries, the notes scrollbar drag, hover and press. No human has read the code.
+  Barbican entries, the notes scrollbar drag, hover and press, the window backdrop. No human has
+  read the code.
 
 ## Next
 
-1. Look at the tray, the balloon and the card live on Windows, once, briefly.
+1. Look at the tray, the balloon, the card and Mica / Acrylic live on Windows, once, briefly.
 2. The by-hand pass (plan section 12): a real install and update of Purge (elevated) through Hub, an
    app updated while open, Explorer restarted under the tray.
 3. Barbican's first release, which brings its `hub.txt`, its sample and its updater standing down.

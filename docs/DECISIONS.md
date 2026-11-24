@@ -270,3 +270,31 @@ the same command as No) so it lights alone. The "close it and update" question s
 the warning-tinted bar it really wants is left to the owner (an opt-in variant of the shared offer
 bar). Would change: the shared crate gaining a hover state of its own for these controls; the
 owner choosing a different way to ask before closing an app.
+## D-033 The window backdrop comes from shared; Hub's chrome is the title row, the command bar and the status bar
+The owner asked for Mica and Acrylic "brought in from shared". Hub uses what mdedit and mdview
+use, with nothing of it copied: `mdshared_app::backdrop::Backdrop` (the type, its settings value,
+`TITLE`, `LABELS`), `mdshared_ui::frost` (`Frost::sync` decides when the chrome is frosted and calls
+`platform::set_backdrop`; `mark` and `key_out` do the pixels) and `platform::backdrop_available`.
+Nothing was missing in shared for this. The setting is `backdrop` in `[settings]` of
+`settings.ini` (`off`, `mica`, `acrylic`; anything else is off), **off by default**, a choice row
+"Window backdrop" in the General group of the card. Its help line is Hub's own, because the shared
+one names a side pane Hub does not have.
+What lets the backdrop through: the title row, the command bar (absent in the release notes view,
+whose page takes its place) and the status bar, the three regions drawn in the flat chrome
+colours. `view::draw_full` lists them in `Layout::chrome` as it draws them, so the marks follow
+the layout and not a second copy of its arithmetic. Opaque: the list with its column heads (the
+content people read), the pane under it (part of the list's content: notes and details of the
+selected app, unlike mdedit's side pane of files), the offer bar (a call to act, drawn in its own
+colours), the release notes page, the row menu and the settings card (drawn with opaque fills over
+the chrome; the card's dimming leaves the chrome under it frosted, as in mdedit).
+As the shared rule has it, the chrome is frosted only while the setting names a backdrop, the
+system shows one (Windows 11 22H2 and later, transparency effects on, no high contrast, no
+battery saver) and the window has the keyboard; otherwise it is the flat colours. With the setting
+off, a frame costs one comparison, nothing is marked, no system call is made and every pixel is
+what it was. The `Frost` is made anew with each window (a closed window is given back whole and the
+tray holds none), so a new window is asked again.
+A shot has no window and no compositor: `--demo backdrop-mica` and `backdrop-acrylic` draw the main
+window keyed out exactly as the present does, laid over a made-up stand-in (a blue-to-rose
+diagonal), to show which regions let it through. They are not what Windows draws.
+Would change: the owner wanting the pane or the list frosted too (then `Layout::chrome` gains
+them); a light Hub wanting no backdrop at all; shared changing which regions it calls chrome.

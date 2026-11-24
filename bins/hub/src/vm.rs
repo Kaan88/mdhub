@@ -204,6 +204,10 @@ pub struct Layout {
     pub notes_view_h: f32,
     /// The notes view's scrollbar as drawn, (track, thumb), when the text can scroll.
     pub notes_bar: Option<(Rect, Rect)>,
+    /// The chrome as it was drawn: the title row, the command bar (not in the notes view) and the
+    /// status bar. What a window backdrop shows through (`frost.rs`); the list, the pane, the
+    /// offer bar and the notes page are not in it.
+    pub chrome: Vec<Rect>,
 }
 
 impl Layout {

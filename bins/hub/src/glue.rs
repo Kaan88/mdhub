@@ -15,6 +15,7 @@ use hub_core::notify::{Memory, Message, Pending};
 use hub_core::selfupdate::{self, Apply, Offer, Staged, Status};
 use hub_core::state::{Store, ViewMode};
 use hub_core::transport::Transport;
+use mdshared_app::backdrop::Backdrop;
 use mdshared_ui::settings::{Row as SettingRow, Value};
 use std::cell::Cell;
 use std::collections::VecDeque;
@@ -758,6 +759,8 @@ pub struct Engine {
     /// "Start with Windows" as the registry says, read when first wanted (never at start).
     autostart: Cell<Option<bool>>,
     tray_on: bool,
+    /// "Window backdrop" (the window follows it, `frost.rs`).
+    backdrop: Backdrop,
 }
 
 /// The release notes view that is open: which version's notes, and how far they have come.
@@ -845,10 +848,11 @@ impl Engine {
             d.store.failures(),
             d.store.interval_hours(),
         );
-        let (notified, notify_on, tray_on) = (
+        let (notified, notify_on, tray_on, backdrop) = (
             d.store.notified(),
             d.store.notify_enabled(),
             d.store.tray_enabled(),
+            d.store.backdrop(),
         );
         Engine {
             store: d.store,
@@ -891,6 +895,7 @@ impl Engine {
             run_key: d.run_key,
             autostart: Cell::new(None),
             tray_on,
+            backdrop,
         }
     }
 
@@ -943,6 +948,7 @@ impl Engine {
             run_key: RunKey::none(),
             autostart: Cell::new(Some(false)),
             tray_on: false,
+            backdrop: Backdrop::Off,
         }
     }
 
@@ -2063,6 +2069,17 @@ impl Engine {
         }
     }
 
+    pub fn backdrop(&self) -> Backdrop {
+        self.backdrop
+    }
+
+    pub fn set_backdrop(&mut self, b: Backdrop) {
+        self.backdrop = b;
+        if self.fixed.is_none() {
+            self.store.set_backdrop(b);
+        }
+    }
+
     pub fn set_interval(&mut self, hours: u32) {
         self.interval = hours;
         if self.fixed.is_none() {
@@ -2128,6 +2145,7 @@ impl Engine {
             tray: self.tray_on,
             notify: self.tell.on,
             interval_hours: self.interval,
+            backdrop: self.backdrop,
             version: env!("CARGO_PKG_VERSION").to_string(),
             hub_status,
             hub_button,
@@ -2142,7 +2160,7 @@ impl Engine {
 
     /// A change made in the card: applied and saved. False for an id or a value that is not one.
     pub fn change_setting(&mut self, id: u32, value: Value) -> bool {
-        use crate::settings::{INTERVAL, NOTIFY, START, TRAY, interval_hours};
+        use crate::settings::{BACKDROP, INTERVAL, NOTIFY, START, TRAY, interval_hours};
         match (id, value) {
             (START, Value::Bool(on)) => self.set_autostart(on),
             (TRAY, Value::Bool(on)) => self.set_tray_enabled(on),
@@ -2151,6 +2169,9 @@ impl Engine {
                 Some(h) => self.set_interval(h),
                 None => return false,
             },
+            (BACKDROP, Value::Choice(i)) if i < Backdrop::ALL.len() => {
+                self.set_backdrop(Backdrop::from_index(i))
+            }
             _ => return false,
         }
         true

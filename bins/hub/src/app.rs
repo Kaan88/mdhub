@@ -143,6 +143,11 @@ struct App {
     /// Kept for as long as the process lives: what second launches asked for. A request from
     /// `hub --quit` arrives here (`QUIT_FROM`); a plain second launch only wakes the loop.
     single: Option<std::sync::mpsc::Receiver<mdshared_app::sister::Request>>,
+    /// The "Window backdrop" setting at work (Windows 11): idle unless the setting is on. Made
+    /// anew with each window, which has asked the compositor for nothing yet.
+    frost: crate::frost::Frost,
+    /// Whether the window has the keyboard (the chrome is frosted only then).
+    focused: bool,
 }
 
 /// The `from` of the request `hub --quit` sends to the running Hub (a second launch has nothing
@@ -253,10 +258,35 @@ impl App {
 
     // ---- drawing ----
 
+    /// The "Window backdrop" setting: asks the system when the setting or the focus changed
+    /// (`Frost::sync`, which calls `set_backdrop`). One comparison a frame when it is off.
+    fn sync_frost(&mut self) {
+        let want = self.engine.backdrop();
+        if !self.frost.concerns(want) {
+            return;
+        }
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        let pal = self.pal();
+        let mut sys = mdshared_ui::frost::WindowSystem(hwnd(&window));
+        if self.frost.sync(want, self.focused, &pal, &mut sys) {
+            let state = if self.frost.key().is_some() {
+                "frosted"
+            } else {
+                "flat"
+            };
+            self.trace
+                .line(&format!("backdrop {}: chrome {state}", want.key()));
+        }
+    }
+
     fn draw(&mut self) {
         let Some(window) = self.window.clone() else {
             return;
         };
+        // Every frame is drawn whole, so a change of the chrome's look needs nothing more.
+        self.sync_frost();
         let size = window.inner_size();
         if size.width == 0 || size.height == 0 {
             return;
@@ -299,6 +329,12 @@ impl App {
             self.nsig = sig;
         }
         let layout = view::draw_full(&mut p, &pal, lw, lh, &vm, self.scroll, self.nscroll);
+        // The chrome lets the backdrop through: its pixels are marked for the present, before
+        // the row menu or the card is drawn over them.
+        let areas = crate::frost::mark_chrome(self.frost.key(), &mut p, &layout.chrome);
+        if self.frost.key().is_some() {
+            self.frost.areas = areas;
+        }
         self.nmax = layout.notes_max_scroll;
         self.nview = layout.notes_view_h;
         self.nscroll = self.nscroll.clamp(0.0, self.nmax);
@@ -345,6 +381,11 @@ impl App {
         let bytes: &mut [u8] = bytemuck::cast_slice_mut(&mut buffer[..]);
         let n = bytes.len().min(self.bmp.pixels.len());
         bytes[..n].copy_from_slice(&self.bmp.pixels[..n]);
+        // A frosted chrome: the flat colour is taken out of its marked pixels, in the window's
+        // copy only (the bitmap keeps what was drawn).
+        if let Some(key) = self.frost.key() {
+            crate::frost::key_out_areas(key, &mut buffer, w.get() as usize, &self.frost.areas);
+        }
         let _ = buffer.present();
     }
 
@@ -820,6 +861,11 @@ impl ApplicationHandler<Event> for App {
                 if !focused && self.engine.set_held(Hit::None) {
                     self.dirty = true;
                 }
+                self.focused = focused;
+                // The chrome is frosted only with the keyboard: drawn again when that changes.
+                if self.frost.concerns(self.engine.backdrop()) {
+                    self.dirty = true;
+                }
                 // An app may have been started or closed meanwhile.
                 if focused && self.last_running.elapsed() >= RUNNING_EVERY {
                     self.last_running = Instant::now();
@@ -1064,6 +1110,8 @@ impl App {
         self.popup = None;
         self.settings = None;
         self.engine.set_focused(false);
+        self.focused = false;
+        self.frost = crate::frost::Frost::default();
         self.surface = None;
         self.window = None;
         self.bmp = Bitmap::new(1, 1);
@@ -1339,6 +1387,8 @@ pub fn run(mut args: Args, started: Instant) -> i32 {
         restart_windowless: false,
         opens: 0,
         single,
+        frost: crate::frost::Frost::default(),
+        focused: false,
     };
     // Under the tray (`--tray`) the icon is the whole program, so it comes first; with a window
     // first, the icon waits until the window's first frame is out (`about_to_wait`).
