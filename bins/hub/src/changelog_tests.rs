@@ -472,6 +472,118 @@ fn a_long_page_scrolls_and_the_scroll_is_clamped_in_the_drawing() {
 }
 
 #[test]
+fn the_scrollbar_is_hit_only_when_the_text_scrolls_and_the_thumb_is_in_front() {
+    let (lay, _) = page("notes", 1280, 800, 0.0, &LIGHT);
+    assert!(lay.notes_bar.is_none());
+    assert!(
+        !lay.hits
+            .iter()
+            .any(|(_, h)| matches!(h, Hit::NotesTrack | Hit::NotesThumb))
+    );
+    let (lay, _) = page("notes-long", 860, 600, 0.0, &LIGHT);
+    let (track, thumb) = lay.notes_bar.expect("a long page has a bar");
+    assert_eq!(lay.at(thumb.cx(), thumb.cy()), Hit::NotesThumb);
+    assert_eq!(lay.at(track.cx(), track.bottom() - 2.0), Hit::NotesTrack);
+    assert!(on_bar(&lay, thumb.cx(), thumb.cy()) && !on_bar(&lay, track.x - 20.0, thumb.cy()));
+}
+
+#[test]
+fn dragging_the_thumb_moves_the_text_in_proportion_and_clamps() {
+    let (lay, _) = page("notes-long", 860, 600, 0.0, &LIGHT);
+    let (track, thumb) = lay.notes_bar.unwrap();
+    let max = lay.notes_max_scroll;
+    // Taken in its middle: the grab is where it was taken, below the thumb's top.
+    let grab = match bar_press(&lay, thumb.cx(), thumb.cy(), 0.0) {
+        Some(BarPress::Grab(g)) => g,
+        other => panic!("{other:?}"),
+    };
+    assert!((grab - thumb.h / 2.0).abs() < 0.01);
+    // Not moved: the text stays at the top.
+    assert_eq!(bar_drag(&lay, grab, thumb.cy()), Some(0.0));
+    // Half the free track down: half the text.
+    let span = track.h - thumb.h;
+    let half = bar_drag(&lay, grab, thumb.cy() + span / 2.0).unwrap();
+    assert!((half - max / 2.0).abs() < 0.5, "{half} vs {}", max / 2.0);
+    let quarter = bar_drag(&lay, grab, thumb.cy() + span / 4.0).unwrap();
+    assert!((quarter - max / 4.0).abs() < 0.5);
+    // The whole way and far past it: the end; far above: the top.
+    assert!((bar_drag(&lay, grab, thumb.cy() + span).unwrap() - max).abs() < 0.5);
+    assert_eq!(bar_drag(&lay, grab, 1e9), Some(max));
+    assert_eq!(bar_drag(&lay, grab, -1e9), Some(0.0));
+    // Nothing from outside panics: NaN and infinities are no move at all.
+    assert_eq!(bar_drag(&lay, grab, f32::NAN), None);
+    assert_eq!(bar_drag(&lay, f32::INFINITY, 10.0), None);
+    // The drawn page at the dragged offset puts the thumb under the pointer.
+    let (lay2, _) = page("notes-long", 860, 600, half, &LIGHT);
+    let (_, t2) = lay2.notes_bar.unwrap();
+    assert!((t2.y + grab - (thumb.cy() + span / 2.0)).abs() < 0.5);
+    // A page that does not scroll has no bar to drag.
+    let (short, _) = page("notes", 1280, 800, 0.0, &LIGHT);
+    assert_eq!(bar_drag(&short, grab, 300.0), None);
+    assert_eq!(bar_press(&short, 1270.0, 300.0, 0.0), None);
+}
+
+#[test]
+fn a_click_on_the_track_pages_toward_it() {
+    let (lay, _) = page("notes-long", 860, 600, 0.0, &LIGHT);
+    let (track, thumb) = lay.notes_bar.unwrap();
+    let (max, view) = (lay.notes_max_scroll, lay.notes_view_h);
+    let pg = scrolled(Nav::PageDown, 0.0, max, view);
+    assert!(pg > 0.0 && pg < max);
+    // Below the thumb: a page down.
+    let below = track.bottom() - 2.0;
+    assert!(below > thumb.bottom());
+    assert_eq!(
+        bar_press(&lay, track.cx(), below, 0.0),
+        Some(BarPress::Page(pg))
+    );
+    // Above the thumb (the text scrolled to its end): a page up.
+    let (end, _) = page("notes-long", 860, 600, max, &LIGHT);
+    let (track, thumb) = end.notes_bar.unwrap();
+    let above = track.y + 2.0;
+    assert!(above < thumb.y);
+    let up = scrolled(Nav::PageUp, max, max, view);
+    assert!(up < max);
+    assert_eq!(
+        bar_press(&end, track.cx(), above, max),
+        Some(BarPress::Page(up))
+    );
+    // Paging clamps: from near the end a page down is the end.
+    assert_eq!(
+        bar_press(&lay, track.cx(), below, max - 1.0),
+        Some(BarPress::Page(max))
+    );
+    // Off the bar: nothing.
+    assert_eq!(bar_press(&lay, track.x - 30.0, below, 0.0), None);
+}
+
+#[test]
+fn the_bar_is_drawn_wide_when_active() {
+    for pal in [LIGHT, DARK] {
+        let (lay, idle) = page("notes-long", 860, 600, 0.0, &pal);
+        let (_, active) = page("notes-bar-active", 860, 600, 0.0, &pal);
+        assert!(
+            idle.pixels != active.pixels,
+            "the active bar looks different"
+        );
+        // Only the bar's column differs.
+        let (track, _) = lay.notes_bar.unwrap();
+        let w = idle.width as usize;
+        for (i, (a, b)) in idle
+            .pixels
+            .chunks(4)
+            .zip(active.pixels.chunks(4))
+            .enumerate()
+        {
+            if a != b {
+                let x = (i % w) as f32;
+                assert!(x >= track.x - 1.0, "pixel {x} outside the bar differs");
+            }
+        }
+    }
+}
+
+#[test]
 fn the_version_line_says_what_goes_to_what() {
     let mut n = crate::demo::build("notes", crate::vm::View::List)
         .unwrap()

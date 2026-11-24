@@ -103,6 +103,8 @@ struct App {
     nmax: f32,
     nview: f32,
     nsig: Option<(&'static str, String, u8)>,
+    /// The notes scrollbar's thumb is being dragged, taken this far below its top.
+    ngrab: Option<f32>,
     mouse: (f32, f32),
     mods: ModifiersState,
     popup: Option<Popup>,
@@ -267,7 +269,14 @@ impl App {
             self.bmp = Bitmap::new(size.width, size.height);
         }
         let pal = self.pal();
-        let vm = self.engine.vm(check::now());
+        let mut vm = self.engine.vm(check::now());
+        if let Some(n) = vm.notes.as_mut() {
+            // Wide while the pointer is on it or drags it (from the last frame's hits).
+            n.bar_active = self.ngrab.is_some()
+                || (self.popup.is_none()
+                    && self.settings.is_none()
+                    && crate::changelog::on_bar(&self.layout, self.mouse.0, self.mouse.1));
+        }
         let geo = view::geometry(lw, lh, &vm);
         self.max_scroll = geo.max_scroll;
         self.scroll = self.scroll.clamp(0.0, self.max_scroll);
@@ -334,7 +343,26 @@ impl App {
     // ---- input ----
 
     fn cursor_moved(&mut self, x: f32, y: f32) {
+        let was = self.mouse;
         self.mouse = (x, y);
+        if let Some(grab) = self.ngrab {
+            // The thumb follows the pointer; the page closed under the drag ends it.
+            match crate::changelog::bar_drag(&self.layout, grab, y) {
+                Some(next) => {
+                    if next != self.nscroll {
+                        self.nscroll = next;
+                        self.dirty = true;
+                    }
+                }
+                None => self.end_bar_drag(),
+            }
+            return;
+        }
+        if crate::changelog::on_bar(&self.layout, was.0, was.1)
+            != crate::changelog::on_bar(&self.layout, x, y)
+        {
+            self.dirty = true;
+        }
         if let Some(form) = &mut self.settings {
             if form.pointer_move(x, y) {
                 self.dirty = true;
@@ -407,6 +435,14 @@ impl App {
             Hit::Max => window.set_maximized(!window.is_maximized()),
             Hit::Close => self.request_close(),
             Hit::Settings => self.open_settings(0),
+            Hit::NotesTrack | Hit::NotesThumb => {
+                match crate::changelog::bar_press(&self.layout, x, y, self.nscroll) {
+                    Some(crate::changelog::BarPress::Grab(g)) => self.ngrab = Some(g),
+                    Some(crate::changelog::BarPress::Page(next)) => self.nscroll = next,
+                    None => {}
+                }
+                self.dirty = true;
+            }
             Hit::None => {
                 // A click on nothing leaves the filter box.
                 self.apply(Cmd::FilterBlur);
@@ -463,6 +499,13 @@ impl App {
             None => return,
         };
         self.settings_outcome(outcome);
+    }
+
+    /// The button let go (or the window lost the pointer): the thumb drag ends.
+    fn end_bar_drag(&mut self) {
+        if self.ngrab.take().is_some() {
+            self.dirty = true;
+        }
     }
 
     fn settings_release(&mut self) {
@@ -744,6 +787,9 @@ impl ApplicationHandler<Event> for App {
             }
             WindowEvent::Focused(focused) => {
                 self.engine.set_focused(focused);
+                if !focused {
+                    self.end_bar_drag();
+                }
                 // An app may have been started or closed meanwhile.
                 if focused && self.last_running.elapsed() >= RUNNING_EVERY {
                     self.last_running = Instant::now();
@@ -776,7 +822,10 @@ impl ApplicationHandler<Event> for App {
                 state: ElementState::Released,
                 button: MouseButton::Left,
                 ..
-            } => self.settings_release(),
+            } => {
+                self.end_bar_drag();
+                self.settings_release();
+            }
             WindowEvent::MouseWheel { delta, .. } => {
                 let dy = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y * ROW_H,
@@ -1223,6 +1272,7 @@ pub fn run(mut args: Args, started: Instant) -> i32 {
         nscroll: 0.0,
         nmax: 0.0,
         nview: 0.0,
+        ngrab: None,
         nsig: None,
         mouse: (-1.0, -1.0),
         mods: ModifiersState::empty(),

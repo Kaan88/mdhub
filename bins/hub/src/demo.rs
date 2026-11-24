@@ -24,6 +24,7 @@ pub const NAMES: &[&str] = &[
     "notes-failed",
     "notes-nofile",
     "notes-long",
+    "notes-bar-active",
 ];
 
 /// What a release notes file of mdedit 1.2.1 could look like: every construct the page reads.
@@ -409,8 +410,10 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
         }
         "empty" => vm(Vec::new(), 0, view),
         // The release notes view of mdedit (1.2.0 installed, 1.2.1 the latest): loaded, still
-        // loading, failed (the one line stays), a release with no notes file, and a long one.
-        "notes" | "notes-loading" | "notes-failed" | "notes-nofile" | "notes-long" => {
+        // loading, failed (the one line stays), a release with no notes file, a long one, and the long
+        // one with its scrollbar active (the pointer on it).
+        "notes" | "notes-loading" | "notes-failed" | "notes-nofile" | "notes-long"
+        | "notes-bar-active" => {
             let mut v = build("main", view)?;
             let one = v.apps.first().map(|a| a.notes.clone()).unwrap_or_default();
             v.notes = Some(NotesVm {
@@ -426,9 +429,11 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
                         "Could not download the notes: connection timed out".into(),
                     ),
                     "notes-nofile" => NotesState::NoFile,
-                    "notes-long" => NotesState::Loaded(long_notes()),
+                    "notes-long" | "notes-bar-active" => NotesState::Loaded(long_notes()),
                     _ => NotesState::Loaded(SAMPLE_NOTES.to_string()),
                 },
+                // The long notes with the pointer on the scrollbar (or dragging its thumb).
+                bar_active: name == "notes-bar-active",
             });
             v
         }

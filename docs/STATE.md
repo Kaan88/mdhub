@@ -54,15 +54,11 @@ they ran (no window to close); 0.1.2 has the fix (D-029), not yet confirmed on t
   `mdedit 1.2.0 -> 1.2.1` and its date under the text; from the row menu, the pane's "Release
   notes" link and the key `n`; Esc, Backspace or the arrow go back. `notes` shows at once;
   `notes.file` is one GET (64 KiB, 10 s) only when the view is opened, kept on disk by app and
-  version; loading, loaded, failed (reason, Try again) and no file are drawn.
-- Verified 2026-11-23 on this PC, on the six-app catalog and again on `main` after both catalog PRs
-  were merged: `cargo fmt --all --check` clean; `cargo clippy --release --workspace --all-targets --
-  -D warnings` clean, and the same with `--features test-hooks`; `cargo test --workspace --release`
-  161 passed (hub, 1 ignored: the icon generator) + 201 passed (hub-core, 1 ignored) + 2 (samples);
-  `tests/shots.sh` 176 PNGs, `tests/shots-check.sh` 0 bad. The `all` list shot was looked at: the
-  Purge and Barbican rows draw with their own icons and texts. Before it: the notes view 2026-11-23
-  (tests 159 + 188, shots twice, byte-identical); the whole repository 2026-11-22 (tests 129 + 183,
-  clippy with and without test-hooks, no `HKCU\Software\HubTest` left behind).
+  version; loading, loaded, failed (reason, Try again) and no file are drawn. The scrollbar's thumb
+  drags, a track click pages toward it, the bar widens under the pointer (`notes-bar-active`).
+- Verified 2026-11-24 (notes scrollbar drag): fmt, clippy (with and without test-hooks) clean;
+  tests 165 (hub) + 201 (hub-core) + 2; 180 shots twice, byte-identical, 0 bad. The whole repository
+  2026-11-22: 129 + 183, both clippies, no `HKCU\Software\HubTest` left behind.
 - Reviewed 2026-11-22, the whole repository: 36 safety rules were removed one at a time (hash and
   size checks, URL pins, the Run value's quoting, asking before closing, one install at a time);
   33 failed a test, 2 had none and got one, 1 is covered by a second check. 200,000 mutated
@@ -79,7 +75,8 @@ they ran (no window to close); 0.1.2 has the fix (D-029), not yet confirmed on t
   | exe size | 3,441,664 bytes (after the icon and the fixes) | none | 3.18 MB |
   With the notes view (7 runs, `--demo main`): first frame 57.9 to 66.3 ms (median 59.5), private
   memory 9.5 to 9.6 MiB, exe 3,638,272 bytes; a 64 KiB notes file lays out in 31 ms once, a scroll
-  frame draws in 0.16 ms from the kept layout.
+  frame draws in 0.16 ms from the kept layout. Scrollbar drag, 2 runs before / after: first frame
+  57.8, 56.9 / 69.3, 61.8 ms, private 9.5 / 9.5 MiB, no idle CPU, exe +1.5 KB.
   **The times were NOT measured again after the icon, the review fixes, the notes view in a
   window, Purge or Barbican**: two new rows add text and two decoded icons, nothing on the launch
   path, but that is reasoning. Unmeasured: a real window-first start, memory with a long notes file
@@ -93,8 +90,8 @@ they ran (no window to close); 0.1.2 has the fix (D-029), not yet confirmed on t
 - An install, update or roll back of Purge or Barbican run by Hub on this PC: neither has been
   installed by it (CLAUDE.md rule 4 keeps that off this machine); Barbican has no release.
 - The notes view in a real window: the page's wiring in `app.rs` (wheel, keys, scroll kept per
-  page) is compiled and read, not run; the scrollbar thumb is drawn but cannot be dragged; the links
-  are not clickable.
+  page, the scrollbar's drag, track click and hover) is compiled and read, not run; the arithmetic
+  under it (`changelog::bar_press`, `bar_drag`) is tested. The links are not clickable.
 - The window made because the offer bar asks (D-025): its wiring in `app.rs` has no test.
 - A use for the manifest's `.min`, `.uninstall` and `.updates`: they are parsed and ignored.
 - "Swap at next start" for a downloaded Hub: it is swapped at "Restart now" or at quit, else
@@ -139,8 +136,8 @@ they ran (no window to close); 0.1.2 has the fix (D-029), not yet confirmed on t
   passes, six defects fixed with tests (`48a9005` to `1f1a161`), 36 safety rules mutation-checked,
   200,000 fuzzed inputs, the FFI read for leaks.
 - Not reviewed by Fable, written and checked by Sonnet agents only: the apps' own icons, the release
-  notes page and its fetch and cache, the 0.1.1 and 0.1.2 bumps, the Purge entry (PR #1) and the
-  Barbican entry (PR #2), and the 0.1.3 bump. No second reviewer read either catalog entry.
+  notes page (fetch, cache), the 0.1.1 and 0.1.2 bumps, the Purge entry (PR #1), the Barbican entry
+  (PR #2), the 0.1.3 bump; the notes scrollbar drag by an Opus agent alone. No second reviewer.
 - No human has read the code.
 
 ## Next

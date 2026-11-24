@@ -22,7 +22,7 @@ exe="$t/release/hub.exe"
 [ -x "$exe" ] || exe="$t/release/hub"
 [ -x "$exe" ] || { echo "shots: no release build at $t/release (cargo build --release -p hub)" >&2; exit 1; }
 
-DEMOS="main first-run updating failed done noinfo running banner all empty settings-general settings-updates settings-about notes notes-loading notes-failed notes-nofile notes-long"
+DEMOS="main first-run updating failed done noinfo running banner all empty settings-general settings-updates settings-about notes notes-loading notes-failed notes-nofile notes-long notes-bar-active"
 VIEWS="list large small"
 THEMES="light dark"
 SIZES="1280x800 860x600"

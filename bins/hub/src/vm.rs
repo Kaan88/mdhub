@@ -98,6 +98,9 @@ pub struct NotesVm {
     /// hub.txt `notes`: always there when the release has any.
     pub one_liner: String,
     pub state: NotesState,
+    /// The scrollbar is drawn active (wide): the pointer is on it or drags its thumb. The shell's
+    /// state, set before each frame; the engine leaves it false.
+    pub bar_active: bool,
 }
 
 /// What a row or tile's button does.
@@ -142,6 +145,9 @@ pub enum Hit {
     NotesRetry,
     /// The notes view's "GitHub": the release page in the browser.
     NotesPage,
+    /// The notes view's scrollbar: its track (a click pages toward it) and its thumb (dragged).
+    NotesTrack,
+    NotesThumb,
     None,
 }
 
@@ -155,6 +161,8 @@ pub struct Layout {
     /// the view is not open), so the shell can clamp the wheel and move by pages.
     pub notes_max_scroll: f32,
     pub notes_view_h: f32,
+    /// The notes view's scrollbar as drawn, (track, thumb), when the text can scroll.
+    pub notes_bar: Option<(Rect, Rect)>,
 }
 
 impl Layout {

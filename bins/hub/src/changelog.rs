@@ -1168,7 +1168,11 @@ pub fn draw_page(
     }
     p.restore(old);
     if let Some((track, thumb)) = scroll::scrollbar(body, content, body.h, scroll) {
-        scroll::draw_scrollbar(p, pal, track, thumb, false);
+        scroll::draw_scrollbar(p, pal, track, thumb, n.bar_active);
+        // The thumb after the track: it is the front-most of the two.
+        lay.hits.push((track, Hit::NotesTrack));
+        lay.hits.push((thumb, Hit::NotesThumb));
+        lay.notes_bar = Some((track, thumb));
     }
 }
 
@@ -1202,6 +1206,69 @@ pub fn scrolled(nav: Nav, cur: f32, max: f32, view: f32) -> f32 {
         Nav::End => max,
     };
     next.clamp(0.0, max)
+}
+
+// ---- the scrollbar under the pointer -----------------------------------------------------------
+
+/// What a press on the notes page's scrollbar does.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum BarPress {
+    /// The thumb was taken this far below its top: the drag keeps it there under the pointer.
+    Grab(f32),
+    /// The track was clicked off the thumb: the text is now at this offset, a page toward it.
+    Page(f32),
+}
+
+/// A press at (`x`, `y`) on the page last drawn into `lay`, the text at `cur`: what it does to the
+/// scrollbar, or None when it is not on it (or the text cannot scroll).
+pub fn bar_press(lay: &Layout, x: f32, y: f32, cur: f32) -> Option<BarPress> {
+    let (_, thumb) = lay.notes_bar?;
+    if !y.is_finite() {
+        return None;
+    }
+    match lay.at(x, y) {
+        Hit::NotesThumb => Some(BarPress::Grab(y - thumb.y)),
+        Hit::NotesTrack => {
+            let nav = if y < thumb.y {
+                Nav::PageUp
+            } else if y >= thumb.bottom() {
+                Nav::PageDown
+            } else {
+                return None;
+            };
+            Some(BarPress::Page(scrolled(
+                nav,
+                cur,
+                lay.notes_max_scroll,
+                lay.notes_view_h,
+            )))
+        }
+        _ => None,
+    }
+}
+
+/// The text's offset while the thumb, taken `grab` below its top, is under a pointer at `y`:
+/// proportional to where the thumb is on its track, clamped to `0..=max`. None when there is no bar
+/// (the page closed or stopped scrolling) or the numbers are not finite.
+pub fn bar_drag(lay: &Layout, grab: f32, y: f32) -> Option<f32> {
+    let (track, thumb) = lay.notes_bar?;
+    let to = y - grab;
+    let (max, view) = (lay.notes_max_scroll, lay.notes_view_h);
+    if !to.is_finite() || !max.is_finite() || !view.is_finite() {
+        return None;
+    }
+    let max = max.max(0.0);
+    let at = scroll::offset_for_thumb(track, thumb.h, to, max + view, view);
+    Some(if at.is_finite() {
+        at.clamp(0.0, max)
+    } else {
+        0.0
+    })
+}
+
+/// The pointer at (`x`, `y`) is on the scrollbar (track or thumb).
+pub fn on_bar(lay: &Layout, x: f32, y: f32) -> bool {
+    matches!(lay.at(x, y), Hit::NotesTrack | Hit::NotesThumb)
 }
 
 #[cfg(test)]
