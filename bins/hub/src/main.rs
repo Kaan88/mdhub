@@ -19,6 +19,7 @@ mod appicon;
 mod changelog;
 mod cli;
 mod demo;
+mod frost;
 mod glue;
 mod grid;
 mod icon;

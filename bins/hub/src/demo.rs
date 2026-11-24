@@ -24,7 +24,20 @@ pub const NAMES: &[&str] = &[
     "notes-failed",
     "notes-nofile",
     "notes-long",
+    "backdrop-mica",
+    "backdrop-acrylic",
 ];
+
+/// The window backdrop a demo's picture is drawn with: the main window with its chrome keyed
+/// out and laid over a stand-in for what the system would show (`frost::preview`).
+pub fn backdrop(name: &str) -> mdshared_app::backdrop::Backdrop {
+    use mdshared_app::backdrop::Backdrop;
+    match name {
+        "backdrop-mica" => Backdrop::Mica,
+        "backdrop-acrylic" => Backdrop::Acrylic,
+        _ => Backdrop::Off,
+    }
+}
 
 /// What a release notes file of mdedit 1.2.1 could look like: every construct the page reads.
 const SAMPLE_NOTES: &str = "# mdedit 1.2.1
@@ -191,6 +204,7 @@ fn vm(apps: Vec<AppVm>, sel: usize, view: View) -> Vm {
 pub fn build(name: &str, view: View) -> Option<Vm> {
     let r = Some;
     Some(match name {
+        "backdrop-mica" | "backdrop-acrylic" => build("main", view)?,
         "main" => vm(
             vec![
                 app("mdedit", Row::Update, r("1.2.0"), r("1.2.1"), false),
@@ -349,6 +363,7 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
                 tray: true,
                 notify: true,
                 interval_hours: 6,
+                backdrop: mdshared_app::backdrop::Backdrop::Off,
                 version: "0.1.0".into(),
                 hub_status: if about {
                     "Hub 0.2.0 is ready: restart to finish".into()

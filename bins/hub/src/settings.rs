@@ -3,6 +3,7 @@
 //! card of the sliders button; the engine (`glue.rs`) applies what it returns and saves it, and
 //! the tray menu changes the same settings, so the card is rebuilt from the engine's rows
 //! whenever they differ from the form's.
+use mdshared_app::backdrop::Backdrop;
 use mdshared_ui::gfx::{Painter, Rect};
 use mdshared_ui::settings::{Form, Row};
 use mdshared_ui::theme::Palette;
@@ -17,6 +18,12 @@ pub const NOTIFY: u32 = 3;
 pub const INTERVAL: u32 = 4;
 /// "Update Hub": the button of the About group.
 pub const UPDATE_HUB: u32 = 5;
+/// "Window backdrop": Off, Mica or Acrylic, by index into `Backdrop::LABELS`.
+pub const BACKDROP: u32 = 6;
+
+/// The help line of "Window backdrop". Hub's own words: the shared one names a side pane, which
+/// Hub does not have (its pane under the list stays opaque, see `frost.rs`).
+pub const BACKDROP_HELP: &str = "Windows 11. Behind the title row and the two bars.";
 
 /// The choices of "Look for updates": the words, and the hours (0 is never: a manual check only).
 pub const INTERVALS: [(&str, u32); 5] = [
@@ -37,6 +44,7 @@ pub struct Model {
     pub tray: bool,
     pub notify: bool,
     pub interval_hours: u32,
+    pub backdrop: Backdrop,
     pub version: String,
     /// The line under Hub's version: where its own update stands.
     pub hub_status: String,
@@ -73,6 +81,13 @@ pub fn rows(m: &Model) -> Vec<Row> {
             .help("Off: closing the window quits Hub."),
         Row::toggle(NOTIFY, "Tell me when updates are found", m.notify)
             .help("One notification per check, never one per app."),
+        Row::choice(
+            BACKDROP,
+            Backdrop::TITLE,
+            &Backdrop::LABELS,
+            m.backdrop.index(),
+        )
+        .help(BACKDROP_HELP),
         Row::header(PAGES[1]),
         Row::choice(
             INTERVAL,
@@ -118,6 +133,7 @@ mod tests {
             tray: true,
             notify: true,
             interval_hours: 6,
+            backdrop: Backdrop::Off,
             version: "0.1.0".into(),
             hub_status: "Up to date".into(),
             hub_button: "Update Hub",
@@ -145,11 +161,14 @@ mod tests {
         assert_eq!(f.value(TRAY), Some(Value::Bool(true)));
         assert_eq!(f.value(NOTIFY), Some(Value::Bool(true)));
         assert_eq!(f.value(INTERVAL), Some(Value::Choice(1)));
+        assert_eq!(f.value(BACKDROP), Some(Value::Choice(0)), "off");
         let mut m = model();
         m.start = true;
         m.interval_hours = 0;
+        m.backdrop = Backdrop::Acrylic;
         let f = Form::new("Settings", rows(&m));
         assert_eq!(f.value(START), Some(Value::Bool(true)));
         assert_eq!(f.value(INTERVAL), Some(Value::Choice(4)));
+        assert_eq!(f.value(BACKDROP), Some(Value::Choice(2)));
     }
 }

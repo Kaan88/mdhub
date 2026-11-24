@@ -197,8 +197,10 @@ pub fn draw_full(
         0.0
     };
     title(p, pal, w, &mut lay);
+    lay.chrome.push(Rect::new(0.0, 0.0, w, TITLE_H));
     if vm.notes.is_none() {
         command_bar(p, pal, w, vm, &mut lay);
+        lay.chrome.push(Rect::new(0.0, TITLE_H, w, BAR_H));
     }
     if let Some(b) = &vm.banner {
         let r = Rect::new(0.0, TITLE_H + BAR_H, w, BANNER_H);
@@ -244,13 +246,9 @@ pub fn draw_full(
             panes::draw(p, pal, geo.pane, vm, &mut lay);
         }
     }
-    status_bar(
-        p,
-        pal,
-        Rect::new(0.0, geo.status_y, w, STATUS_H.min(h)),
-        w,
-        vm,
-    );
+    let status = Rect::new(0.0, geo.status_y, w, STATUS_H.min(h));
+    status_bar(p, pal, status, w, vm);
+    lay.chrome.push(status);
     lay
 }
 

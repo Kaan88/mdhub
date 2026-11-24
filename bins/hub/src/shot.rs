@@ -1,8 +1,10 @@
 //! `hub --shot OUT.png [--size WxH] [--scale N] [--light|--dark] [--view list|large|small]
 //! [--demo NAME]`: renders a Vm to a PNG with no window.
 use crate::demo;
+use crate::frost;
 use crate::view;
 use crate::vm::{View, Vm};
+use mdshared_app::backdrop::Backdrop;
 use mdshared_text::bitmap::Bitmap;
 use mdshared_ui::gfx::{Gfx, Painter};
 use mdshared_ui::theme::{DARK, LIGHT, Palette};
@@ -77,16 +79,32 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
 
 /// The window as a bitmap, `w` x `h` logical px at `scale`.
 pub fn render(vm: &Vm, pal: &Palette, w: u32, h: u32, scale: f32) -> Bitmap {
+    render_with(vm, pal, w, h, scale, Backdrop::Off)
+}
+
+/// The window as a bitmap with `backdrop` behind its chrome: with `Off` exactly [`render`],
+/// otherwise the chrome laid over a stand-in for the system's backdrop (`frost::preview`).
+pub fn render_with(
+    vm: &Vm,
+    pal: &Palette,
+    w: u32,
+    h: u32,
+    scale: f32,
+    backdrop: Backdrop,
+) -> Bitmap {
     let mut bmp = Bitmap::new(
         ((w as f32 * scale).round() as u32).max(1),
         ((h as f32 * scale).round() as u32).max(1),
     );
     let mut gfx = Gfx::new();
     let mut p = Painter::new(&mut bmp, &mut gfx, scale);
-    view::draw(&mut p, pal, w as f32, h as f32, vm);
+    let lay = view::draw(&mut p, pal, w as f32, h as f32, vm);
+    let key = frost::key_for(backdrop, pal);
+    let areas = frost::mark_chrome(key.as_ref(), &mut p, &lay.chrome);
     if let Some((rows, page)) = &vm.settings {
         crate::settings::draw_card(&mut p, pal, w as f32, h as f32, rows.clone(), *page);
     }
+    frost::preview(&mut bmp, &areas, backdrop, pal);
     bmp
 }
 
@@ -104,7 +122,14 @@ pub fn run(args: &[String]) -> i32 {
         return 2;
     };
     let pal = if a.dark { DARK } else { LIGHT };
-    let bmp = render(&vm, &pal, a.size.0, a.size.1, a.scale);
+    let bmp = render_with(
+        &vm,
+        &pal,
+        a.size.0,
+        a.size.1,
+        a.scale,
+        demo::backdrop(&a.demo),
+    );
     match bmp.write_png(Path::new(&a.out)) {
         Ok(()) => 0,
         Err(e) => {
