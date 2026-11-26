@@ -186,7 +186,7 @@ pub enum Hit {
     NotesBack,
     /// The notes view's "Try again".
     NotesRetry,
-    /// The notes view's "GitHub": the release page in the browser.
+    /// The notes view's "View on GitHub": the release page in the browser.
     NotesPage,
     /// The notes view's scrollbar: its track (a click pages toward it) and its thumb (dragged).
     NotesTrack,

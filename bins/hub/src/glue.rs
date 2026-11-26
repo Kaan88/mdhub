@@ -517,7 +517,7 @@ pub enum Cmd {
     NotesClose,
     /// "Try again" in the notes view.
     NotesRetry,
-    /// "Release page" in the notes view: the release on GitHub, in the browser.
+    /// "View on GitHub" in the notes view: the release on GitHub, in the browser.
     NotesPage,
     FocusFilter,
     FilterChar(char),
@@ -532,11 +532,41 @@ pub enum Cmd {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MenuItem {
     Open,
+    Action(Act),
     ShowInFolder,
     ReleaseNotes,
     SkipVersion,
     RollBack,
     GitHub,
+}
+
+/// Small tiles have no separate buttons. Lead with the same available actions a row shows,
+/// then keep its secondary menu entries; Open, when also on the row, appears only once.
+pub fn small_menu_items(
+    app: &AppVm,
+    secondary: Vec<(MenuItem, &'static str, bool)>,
+) -> Vec<(MenuItem, &'static str, bool)> {
+    let mut items: Vec<_> = crate::view::row_actions(app)
+        .iter()
+        .map(|b| {
+            (
+                if b.act == Act::Open {
+                    MenuItem::Open
+                } else {
+                    MenuItem::Action(b.act)
+                },
+                b.label,
+                true,
+            )
+        })
+        .collect();
+    let has_open = items.iter().any(|(item, _, _)| *item == MenuItem::Open);
+    items.extend(
+        secondary
+            .into_iter()
+            .filter(|(item, _, _)| !has_open || *item != MenuItem::Open),
+    );
+    items
 }
 
 pub fn act_cmd(id: &'static str, act: Act) -> Cmd {
@@ -1795,6 +1825,16 @@ impl Engine {
         let app = slot.app;
         match item {
             MenuItem::Open => self.open(id),
+            MenuItem::Action(act) => {
+                // A check or worker can change the row while the menu is open.
+                if !crate::view::row_actions(&app_vm(slot, check::now()))
+                    .iter()
+                    .any(|b| b.act == act)
+                {
+                    return false;
+                }
+                self.apply(act_cmd(id, act))
+            }
             MenuItem::ShowInFolder => {
                 if let Some(i) = &slot.installed {
                     self.shell.reveal(&i.exe);

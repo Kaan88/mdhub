@@ -20,6 +20,7 @@ use hub_core::selfupdate;
 use hub_core::state::{Store, WindowPlacement};
 use mdshared_text::bitmap::Bitmap;
 use mdshared_ui::anim::document;
+use mdshared_ui::cursor::{Cursor, CursorState};
 use mdshared_ui::gfx::{Gfx, Painter, Rect};
 use mdshared_ui::keys::{Mods, key_name};
 use mdshared_ui::settings::Outcome;
@@ -35,7 +36,7 @@ use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, Window
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WKey, ModifiersState, NamedKey};
 use winit::platform::windows::WindowAttributesExtWindows;
-use winit::window::{CursorIcon, ResizeDirection, Window, WindowId, WindowLevel};
+use winit::window::{ResizeDirection, Window, WindowId, WindowLevel};
 
 /// The longest the loop sleeps in one go: a clock that jumped (sleep, resume) is noticed.
 const MAX_SLEEP: Duration = Duration::from_secs(30 * 60);
@@ -83,13 +84,14 @@ struct App {
     nsig: Option<(&'static str, String, u8)>,
     /// The notes scrollbar's thumb is being dragged, taken this far below its top.
     ngrab: Option<f32>,
-    mouse: (f32, f32),
+    /// The last position inside this window; leaving invalidates it across redraws.
+    mouse: Option<(f32, f32)>,
     mods: ModifiersState,
     popup: Overlay<Popup>,
     motion: WindowMotion,
     motion_watched: bool,
     last_title_click: Option<Instant>,
-    cursor: CursorIcon,
+    cursor: CursorState,
     dirty: bool,
     exit_now: bool,
     /// The window was asked to close while an install ran: the install is told to stop and the
@@ -173,15 +175,6 @@ fn map_key(ev: &KeyEvent) -> Option<Key> {
     }
 }
 
-fn edge_cursor(d: ResizeDirection) -> CursorIcon {
-    match d {
-        ResizeDirection::West | ResizeDirection::East => CursorIcon::EwResize,
-        ResizeDirection::North | ResizeDirection::South => CursorIcon::NsResize,
-        ResizeDirection::NorthWest | ResizeDirection::SouthEast => CursorIcon::NwseResize,
-        ResizeDirection::NorthEast | ResizeDirection::SouthWest => CursorIcon::NeswResize,
-    }
-}
-
 impl App {
     fn dark(&self) -> bool {
         self.args.dark.unwrap_or(self.system_dark)
@@ -203,30 +196,16 @@ impl App {
     }
 
     fn apply(&mut self, cmd: Cmd) {
+        let reveal = reveals_selection(&cmd);
         if self.engine.apply(cmd) {
             self.dirty = true;
+            if reveal {
+                let size = self.logical();
+                let vm = self.engine.vm(check::now());
+                self.scroll = reveal_selection(&vm, size, self.scroll);
+            }
         }
         self.check_restart();
-        self.keep_selection_visible();
-    }
-
-    /// In the list, a selection moved by the keyboard scrolls into view.
-    fn keep_selection_visible(&mut self) {
-        if self.vm.view != View::List {
-            return;
-        }
-        let (_, h) = self.logical();
-        let vm = self.engine.vm(check::now());
-        let geo = view::geometry(self.logical().0, h, &vm);
-        let body_h = (geo.list.h - HEAD_H).max(0.0);
-        let top = vm.sel as f32 * ROW_H;
-        if top < self.scroll {
-            self.scroll = top;
-            self.dirty = true;
-        } else if top + ROW_H > self.scroll + body_h {
-            self.scroll = (top + ROW_H - body_h).max(0.0);
-            self.dirty = true;
-        }
     }
 
     fn raise(&self) {
@@ -293,11 +272,7 @@ impl App {
         let pal = self.pal();
         let mut vm = self.engine.vm(check::now());
         if let Some(n) = vm.notes.as_mut() {
-            // Wide while the pointer is on it or drags it (from the last frame's hits).
-            n.bar_active = self.ngrab.is_some()
-                || (!self.popup.is_open()
-                    && !self.settings.is_open()
-                    && crate::changelog::on_bar(&self.layout, self.mouse.0, self.mouse.1));
+            n.bar_active = self.pointer_target().notes_bar();
         }
         let geo = view::geometry(lw, lh, &vm);
         self.max_scroll = geo.max_scroll;
@@ -369,21 +344,10 @@ impl App {
         self.dirty = false;
         // The rows moved under a still pointer (a scroll, a new filter, a result): the highlight
         // follows the pointer, so a click lands on the row that is lit.
-        let covered = self.popup.is_open() || self.settings.is_open();
-        let hover = if covered {
-            None
-        } else {
-            hover_row(&self.layout, self.mouse)
-        };
-        if self.engine.set_hover(hover) {
-            self.dirty = true;
-        }
-        // And so does the lit button.
-        if self
-            .engine
-            .set_hot(hot_hit(&self.layout, self.mouse, covered))
-        {
-            self.dirty = true;
+        self.sync_pointer();
+        if let Some(pop) = self.popup.input() {
+            let (x, y) = self.mouse.unwrap_or((-1.0, -1.0));
+            self.dirty |= pop.menu.pointer(x, y);
         }
         self.present();
     }
@@ -416,8 +380,7 @@ impl App {
     // ---- input ----
 
     fn cursor_moved(&mut self, x: f32, y: f32) {
-        let was = self.mouse;
-        self.mouse = (x, y);
+        self.mouse = Some((x, y));
         if let Some(grab) = self.ngrab {
             // The thumb follows the pointer; the page closed under the drag ends it.
             match crate::changelog::bar_drag(&self.layout, grab, y) {
@@ -429,58 +392,53 @@ impl App {
                 }
                 None => self.end_bar_drag(),
             }
-            return;
+        } else if let Some(form) = self.settings.input() {
+            self.dirty |= form.pointer_move(x, y);
+        } else if let Some(pop) = self.popup.input() {
+            self.dirty |= pop.menu.pointer(x, y);
         }
-        if crate::changelog::on_bar(&self.layout, was.0, was.1)
-            != crate::changelog::on_bar(&self.layout, x, y)
+        self.sync_pointer();
+    }
+
+    fn pointer_target(&self) -> PointerTarget {
+        let (size, maximized) = self.mouse.map_or(((0.0, 0.0), false), |_| {
+            (
+                self.logical(),
+                self.window.as_ref().is_some_and(|w| w.is_maximized()),
+            )
+        });
+        pointer_target(
+            &self.layout,
+            self.mouse,
+            size,
+            maximized,
+            self.settings.is_open() || self.popup.is_open(),
+            self.ngrab.is_some(),
+        )
+    }
+
+    fn sync_pointer(&mut self) {
+        let target = self.pointer_target();
+        if let Some(icon) = self.cursor.set(target.cursor())
+            && let Some(w) = &self.window
         {
-            self.dirty = true;
+            w.set_cursor(icon);
         }
-        if (self.settings.is_open() || self.popup.is_open()) && self.engine.set_hot(Hit::None) {
-            self.dirty = true;
-        }
-        if let Some(form) = self.settings.input() {
-            if form.pointer_move(x, y) {
-                self.dirty = true;
-            }
-            return;
-        }
-        if let Some(pop) = self.popup.input() {
-            if pop.menu.pointer(x, y) {
-                self.dirty = true;
-            }
-            return;
-        }
-        let (lw, lh) = self.logical();
-        let maximized = self.window.as_ref().is_some_and(|w| w.is_maximized());
-        let edge = if maximized {
-            None
-        } else {
-            edge_at(x, y, lw, lh)
+        let hot = target.hit();
+        let row = match hot {
+            Hit::Row(i) | Hit::Action(i, _) | Hit::Menu(i) => Some(i),
+            _ => None,
         };
-        let icon = edge.map_or(CursorIcon::Default, edge_cursor);
-        if icon != self.cursor {
-            self.cursor = icon;
-            if let Some(w) = &self.window {
-                w.set_cursor(icon);
-            }
-        }
-        if self.engine.set_hover(hover_row(&self.layout, (x, y))) {
-            self.dirty = true;
-        }
-        // On a resize edge a press resizes: no button lights there.
-        let hot = if edge.is_some() {
-            Hit::None
-        } else {
-            hot_hit(&self.layout, (x, y), false)
-        };
-        if self.engine.set_hot(hot) {
-            self.dirty = true;
-        }
+        self.dirty |= self.engine.set_hover(row) | self.engine.set_hot(hot);
+        self.dirty |= self
+            .vm
+            .notes
+            .as_ref()
+            .is_some_and(|n| n.bar_active != target.notes_bar());
     }
 
     fn click(&mut self) {
-        let (x, y) = self.mouse;
+        let Some((x, y)) = self.mouse else { return };
         if let Some(pop) = self.popup.input() {
             pop.menu.pointer(x, y);
             let picked = pop.menu.chosen().map(|item| (pop.id, item));
@@ -494,14 +452,14 @@ impl App {
         let Some(window) = self.window.clone() else {
             return;
         };
-        let (lw, lh) = self.logical();
-        if !window.is_maximized()
-            && let Some(dir) = edge_at(x, y, lw, lh)
-        {
-            let _ = window.drag_resize_window(dir);
-            return;
-        }
-        let hit = self.layout.at(x, y);
+        let hit = match self.pointer_target() {
+            PointerTarget::Edge(dir) => {
+                let _ = window.drag_resize_window(dir);
+                return;
+            }
+            PointerTarget::Control(hit) => hit,
+            _ => return,
+        };
         match hit {
             Hit::Drag => {
                 let double = self
@@ -577,7 +535,7 @@ impl App {
     }
 
     fn settings_press(&mut self) {
-        let (x, y) = self.mouse;
+        let Some((x, y)) = self.mouse else { return };
         let mods = Mods::from_winit(self.mods);
         let outcome = match self.settings.input() {
             Some(f) => f.press(x, y, mods, 1),
@@ -586,7 +544,7 @@ impl App {
         self.settings_outcome(outcome);
     }
 
-    /// The button let go (or the window lost the pointer): the thumb drag ends.
+    /// The button was released or the window lost focus: the thumb drag ends.
     fn end_bar_drag(&mut self) {
         if self.ngrab.take().is_some() {
             self.dirty = true;
@@ -594,7 +552,7 @@ impl App {
     }
 
     fn settings_release(&mut self) {
-        let (x, y) = self.mouse;
+        let (x, y) = self.mouse.unwrap_or((-1.0, -1.0));
         let outcome = match self.settings.input() {
             Some(f) => f.release(x, y),
             None => return,
@@ -673,10 +631,16 @@ impl App {
     }
 
     fn open_popup(&mut self, i: usize) {
-        let Some(id) = self.vm.apps.get(i).map(|a| a.id) else {
+        let Some(app) = self.vm.apps.get(i) else {
             return;
         };
+        let id = app.id;
         let items = self.engine.menu_items(id);
+        let items = if self.vm.view == View::Small {
+            glue::small_menu_items(app, items)
+        } else {
+            items
+        };
         let Some(anchor) = self
             .layout
             .hits
@@ -686,7 +650,7 @@ impl App {
         else {
             return;
         };
-        self.popup.show(Popup::new(id, anchor, items));
+        self.popup.show(Popup::new(id, anchor, self.vm.view, items));
         self.dirty = true;
     }
 
@@ -761,18 +725,89 @@ fn closes_popup(ev: &WindowEvent) -> bool {
     )
 }
 
-/// The control the pointer lights: what the last frame drew under it, or nothing while the
-/// settings card or a menu covers the window.
-fn hot_hit(layout: &Layout, (x, y): (f32, f32), covered: bool) -> Hit {
-    if covered { Hit::None } else { layout.at(x, y) }
+fn reveals_selection(cmd: &Cmd) -> bool {
+    matches!(cmd, Cmd::SelectRel(_) | Cmd::SetView(_))
 }
 
-/// The row (or its button) under the pointer.
-fn hover_row(layout: &Layout, (x, y): (f32, f32)) -> Option<usize> {
-    match layout.at(x, y) {
-        Hit::Row(i) | Hit::Action(i, _) | Hit::Menu(i) => Some(i),
-        _ => None,
+/// Bounds below the fixed heading, using the same geometry as the painter.
+fn selection_bounds(vm: &Vm, w: f32) -> Option<(f32, f32)> {
+    vm.apps.get(vm.sel)?;
+    Some(match vm.view {
+        View::List => (vm.sel as f32 * ROW_H, (vm.sel + 1) as f32 * ROW_H),
+        view => crate::grid::selection_bounds(view, w, vm.sel),
+    })
+}
+
+fn reveal_selection(vm: &Vm, (w, h): (f32, f32), scroll: f32) -> f32 {
+    let geo = view::geometry(w, h, vm);
+    let scroll = scroll.clamp(0.0, geo.max_scroll);
+    let Some((top, bottom)) = selection_bounds(vm, geo.list.w) else {
+        return scroll;
+    };
+    let body = (geo.list.h - HEAD_H).max(0.0);
+    scroll
+        .clamp((bottom - body).min(top), top)
+        .clamp(0.0, geo.max_scroll)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PointerTarget {
+    Outside,
+    Overlay,
+    Edge(ResizeDirection),
+    Control(Hit),
+    NotesDrag,
+}
+
+impl PointerTarget {
+    fn hit(self) -> Hit {
+        match self {
+            Self::Control(hit) => hit,
+            Self::NotesDrag => Hit::NotesThumb,
+            _ => Hit::None,
+        }
     }
+
+    fn cursor(self) -> Cursor {
+        match self {
+            Self::Edge(dir) => Cursor::of_resize(dir),
+            Self::Control(Hit::Filter) => Cursor::Text,
+            Self::Control(Hit::Notes(_)) => Cursor::Hand,
+            Self::Control(Hit::NotesThumb) => Cursor::Grab,
+            Self::NotesDrag => Cursor::Grabbing,
+            _ => Cursor::Default,
+        }
+    }
+
+    fn notes_bar(self) -> bool {
+        crate::changelog::bar_hit(self.hit())
+    }
+}
+
+fn pointer_target(
+    layout: &Layout,
+    mouse: Option<(f32, f32)>,
+    (w, h): (f32, f32),
+    maximized: bool,
+    covered: bool,
+    notes_drag: bool,
+) -> PointerTarget {
+    if covered {
+        return PointerTarget::Overlay;
+    }
+    if notes_drag {
+        return PointerTarget::NotesDrag;
+    }
+    let Some((x, y)) = mouse else {
+        return PointerTarget::Outside;
+    };
+    if !Rect::new(0.0, 0.0, w, h).contains(x, y) {
+        return PointerTarget::Outside;
+    }
+    if !maximized && let Some(dir) = edge_at(x, y, w, h) {
+        return PointerTarget::Edge(dir);
+    }
+    PointerTarget::Control(layout.at(x, y))
 }
 
 impl ApplicationHandler<Event> for App {
@@ -881,7 +916,7 @@ impl ApplicationHandler<Event> for App {
                 );
             }
             WindowEvent::CursorLeft { .. } => {
-                self.mouse = (-1.0, -1.0);
+                self.mouse = None;
                 if self
                     .popup
                     .input()
@@ -889,9 +924,7 @@ impl ApplicationHandler<Event> for App {
                 {
                     self.dirty = true;
                 }
-                if self.engine.set_hover(None) | self.engine.set_hot(Hit::None) {
-                    self.dirty = true;
-                }
+                self.sync_pointer();
             }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
@@ -927,7 +960,9 @@ impl ApplicationHandler<Event> for App {
                 };
                 if let Some(f) = self.settings.input() {
                     // The card scrolls towards its end when the wheel turns down.
-                    if f.wheel(self.mouse.0, self.mouse.1, -dy) {
+                    if let Some((x, y)) = self.mouse
+                        && f.wheel(x, y, -dy)
+                    {
                         self.dirty = true;
                     }
                     return;
@@ -1184,8 +1219,8 @@ impl App {
         self.nmax = 0.0;
         self.nview = 0.0;
         self.nsig = None;
-        self.mouse = (-1.0, -1.0);
-        self.cursor = CursorIcon::Default;
+        self.mouse = None;
+        self.cursor.forget();
         self.shown = false;
         self.first = false;
         self.dirty = false;
@@ -1425,13 +1460,13 @@ pub fn run(mut args: Args, started: Instant) -> i32 {
         nview: 0.0,
         ngrab: None,
         nsig: None,
-        mouse: (-1.0, -1.0),
+        mouse: None,
         mods: ModifiersState::empty(),
         popup: Overlay::new(document::MENU),
         motion: WindowMotion::default(),
         motion_watched: false,
         last_title_click: None,
-        cursor: CursorIcon::Default,
+        cursor: CursorState::new(),
         dirty: false,
         first: false,
         shown: false,
@@ -1510,7 +1545,7 @@ fn restart_hub(exe: &std::path::Path, args: &Args, windowless: bool) {
 mod tests {
     use super::*;
     use winit::dpi::PhysicalSize;
-    use winit::window::Theme;
+    use winit::window::{CursorIcon, Theme};
 
     /// `hub --quit` reaches the running Hub's listener as a request whose sender is `QUIT_FROM`,
     /// and a plain second launch (no request) does not look like one.
@@ -1575,5 +1610,136 @@ mod tests {
         ))));
         assert!(!closes_popup(&WindowEvent::ThemeChanged(Theme::Dark)));
         assert!(!closes_popup(&WindowEvent::Focused(true)));
+    }
+
+    #[test]
+    fn reveal_uses_the_selected_rows_painted_bounds_in_each_view() {
+        let size = (520.0, 360.0);
+        let mut bmp = Bitmap::new(520, 360);
+        let mut gfx = Gfx::new();
+        let mut p = Painter::new(&mut bmp, &mut gfx, 1.0);
+        for (mode, row_h) in [
+            (View::List, ROW_H),
+            (View::Small, crate::grid::SMALL_H),
+            (View::Large, crate::grid::LARGE_H),
+        ] {
+            let mut vm = demo::build("all", mode).unwrap();
+            vm.sel = vm.apps.len() - 1;
+            let geo = view::geometry(size.0, size.1, &vm);
+            let scroll = reveal_selection(&vm, size, 0.0);
+            assert!(scroll > 0.0 && scroll <= geo.max_scroll, "{mode:?}");
+            let lay = view::draw_scrolled(&mut p, &LIGHT, size.0, size.1, &vm, scroll);
+            let rect = lay
+                .hits
+                .iter()
+                .find(|(_, hit)| *hit == Hit::Row(vm.sel))
+                .unwrap()
+                .0;
+            assert_eq!(rect.h, row_h, "{mode:?} did not reveal the entire tile");
+            assert_eq!(reveal_selection(&vm, size, scroll), scroll);
+            assert_eq!(reveal_selection(&vm, size, f32::MAX), geo.max_scroll);
+            vm.sel = 0;
+            let top = selection_bounds(&vm, size.0).unwrap().0;
+            assert_eq!(reveal_selection(&vm, size, scroll), top);
+        }
+        let empty = Vm::default();
+        assert_eq!(selection_bounds(&empty, size.0), None);
+        assert_eq!(reveal_selection(&empty, size, 400.0), 0.0);
+    }
+
+    #[test]
+    fn only_keyboard_selection_or_a_view_switch_should_reveal_the_selection() {
+        assert!(reveals_selection(&Cmd::SelectRel(1)));
+        assert!(reveals_selection(&Cmd::SetView(View::Large)));
+        for cmd in [
+            Cmd::CheckNow,
+            Cmd::FilterBlur,
+            Cmd::Select(0),
+            Cmd::Open("mdedit"),
+        ] {
+            assert!(
+                !reveals_selection(&cmd),
+                "{cmd:?} must leave manual scroll alone"
+            );
+        }
+    }
+
+    #[test]
+    fn cursor_and_hot_hit_come_from_the_same_uncovered_control() {
+        let layout = Layout {
+            hits: vec![
+                (Rect::new(60.0, 20.0, 200.0, 28.0), Hit::Filter),
+                (Rect::new(60.0, 100.0, 200.0, 28.0), Hit::Notes(2)),
+                (Rect::new(489.0, 100.0, 20.0, 100.0), Hit::NotesThumb),
+                (Rect::new(510.0, 20.0, 10.0, 28.0), Hit::Menu(1)),
+            ],
+            ..Layout::default()
+        };
+        let size = (520.0, 360.0);
+        let resolve =
+            |pos, max, covered, drag| pointer_target(&layout, pos, size, max, covered, drag);
+        for (xy, hit, cursor) in [
+            ((70.0, 25.0), Hit::Filter, CursorIcon::Text),
+            ((70.0, 110.0), Hit::Notes(2), CursorIcon::Pointer),
+            ((495.0, 110.0), Hit::NotesThumb, CursorIcon::Grab),
+        ] {
+            let target = resolve(Some(xy), false, false, false);
+            assert_eq!((target.hit(), target.cursor().icon()), (hit, cursor));
+            let covered = resolve(Some(xy), false, true, false);
+            assert_eq!(
+                (covered.hit(), covered.cursor().icon()),
+                (Hit::None, CursorIcon::Default)
+            );
+        }
+        let edge = Some((515.0, 30.0));
+        let target = resolve(edge, false, false, false);
+        assert_eq!(
+            (target.hit(), target.cursor().icon()),
+            (Hit::None, CursorIcon::EwResize)
+        );
+        assert_eq!(resolve(edge, true, false, false).hit(), Hit::Menu(1));
+        assert_eq!(resolve(edge, false, true, false), PointerTarget::Overlay);
+        let drag = resolve(edge, false, false, true);
+        assert_eq!(drag.cursor().icon(), CursorIcon::Grabbing);
+        assert!(drag.notes_bar());
+        assert_eq!(
+            resolve(None, false, false, true).cursor().icon(),
+            CursorIcon::Grabbing
+        );
+        let left = resolve(None, false, false, false);
+        assert_eq!(
+            (left.hit(), left.cursor().icon()),
+            (Hit::None, CursorIcon::Default)
+        );
+        assert!(!left.notes_bar());
+    }
+
+    #[test]
+    fn the_painted_notes_thumb_can_be_grabbed_without_resizing_the_window() {
+        let mut bmp = Bitmap::new(520, 360);
+        let mut gfx = Gfx::new();
+        let mut p = Painter::new(&mut bmp, &mut gfx, 1.0);
+        let vm = demo::build("notes-long", View::List).unwrap();
+        let size = (520.0, 360.0);
+        let layout = view::draw(&mut p, &LIGHT, size.0, size.1, &vm);
+        let (_, thumb) = layout.notes_bar.unwrap();
+        // The shared scrollbar paints the resting 3 px thumb 3 px from the track's right edge.
+        let ink = Some((thumb.right() - 4.5, thumb.cy()));
+        let target = pointer_target(&layout, ink, size, false, false, false);
+        assert_eq!(
+            (target.hit(), target.cursor()),
+            (Hit::NotesThumb, Cursor::Grab)
+        );
+        assert!(matches!(
+            pointer_target(
+                &layout,
+                Some((size.0 - 1.0, thumb.cy())),
+                size,
+                false,
+                false,
+                false
+            ),
+            PointerTarget::Edge(ResizeDirection::East)
+        ));
     }
 }

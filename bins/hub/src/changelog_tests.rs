@@ -84,7 +84,6 @@ fn bold_italic_code_links_and_escapes() {
     assert_eq!(style_of(&s, "it").map(|s| s.italic), Some(true));
     assert_eq!(style_of(&s, "it2").map(|s| s.italic), Some(true));
     assert_eq!(style_of(&s, "co de").map(|s| s.code), Some(true));
-    assert_eq!(style_of(&s, "text").map(|s| s.link), Some(true));
     let all = text_of(&s);
     assert!(
         all.contains("a bold and it and it2 and co de and text *lit*"),
@@ -98,6 +97,19 @@ fn bold_italic_code_links_and_escapes() {
     assert_eq!(
         style_of(&t, "both").map(|s| (s.bold, s.italic)),
         Some((true, true))
+    );
+}
+
+#[test]
+fn markdown_link_labels_lay_out_like_plain_text_including_the_surrounding_style() {
+    let (mut bmp, mut gfx) = (Bitmap::new(520, 360), Gfx::new());
+    let mut p = Painter::new(&mut bmp, &mut gfx, 1.0);
+    let linked =
+        parse("A [label](https://example.com) and ***[soft bold](https://example.com)***.");
+    let plain = parse("A label and ***soft bold***.");
+    assert_eq!(
+        layout(&mut p, &linked, 400.0),
+        layout(&mut p, &plain, 400.0)
     );
 }
 
@@ -432,6 +444,10 @@ fn the_page_has_a_back_arrow_a_release_page_button_and_no_list() {
                 .unwrap()
                 .0;
             assert!(back.x >= 0.0 && page_btn.right() <= w as f32);
+            assert_eq!(
+                page_btn.w,
+                with_painter(w, h, |p| crate::ui::btn_w(p, "View on GitHub")),
+            );
             assert!(
                 !crate::ui::intersect(back, page_btn).is_some(),
                 "{w}x{h}: the buttons overlap"
@@ -484,7 +500,9 @@ fn the_scrollbar_is_hit_only_when_the_text_scrolls_and_the_thumb_is_in_front() {
     let (track, thumb) = lay.notes_bar.expect("a long page has a bar");
     assert_eq!(lay.at(thumb.cx(), thumb.cy()), Hit::NotesThumb);
     assert_eq!(lay.at(track.cx(), track.bottom() - 2.0), Hit::NotesTrack);
-    assert!(on_bar(&lay, thumb.cx(), thumb.cy()) && !on_bar(&lay, track.x - 20.0, thumb.cy()));
+    assert!(
+        bar_hit(lay.at(thumb.cx(), thumb.cy())) && !bar_hit(lay.at(track.x - 20.0, thumb.cy()))
+    );
 }
 
 #[test]

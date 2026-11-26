@@ -111,12 +111,12 @@ pub fn menu(s: &Snapshot) -> Vec<Entry> {
     m.push(Entry::Separator);
     m.push(item(
         TrayCmd::ToggleStart,
-        "Start with Windows",
+        crate::settings::START_LABEL,
         s.start_with_windows,
     ));
     m.push(item(
         TrayCmd::ToggleNotify,
-        "Notify about updates",
+        crate::settings::NOTIFY_LABEL,
         s.notify,
     ));
     m.push(Entry::Separator);

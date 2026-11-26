@@ -540,16 +540,15 @@ fn the_offer_bar_has_yes_no_and_a_close_that_means_no() {
 }
 
 #[test]
-fn every_row_has_a_menu_in_the_list_and_the_large_grid_but_not_the_small() {
-    for (v, want) in [
-        (View::List, true),
-        (View::Large, true),
-        (View::Small, false),
-    ] {
+fn every_row_has_one_hittable_menu_in_each_view() {
+    for v in VIEWS {
         let vm = demo::build("main", v).unwrap();
         let l = lay_of(&vm, 1280, 800);
         for i in 0..vm.apps.len() {
-            assert_eq!(count(&l, Hit::Menu(i)), usize::from(want), "{v:?} app {i}");
+            let hit = Hit::Menu(i);
+            assert_eq!(count(&l, hit), 1, "{v:?} app {i}");
+            let (r, _) = l.hits.iter().find(|(_, h)| *h == hit).unwrap();
+            assert_eq!(l.at(r.cx(), r.cy()), hit, "{v:?} app {i}");
         }
     }
 }

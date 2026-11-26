@@ -4,7 +4,7 @@ use crate::cli;
 use crate::e2e_tests::{Fx, body, ver};
 use crate::glue::{
     Cmd, Key, MenuItem, Phase, Slot, act_cmd, app_vm, check_wait, command, fail_text, fmt_date,
-    fmt_size, key_command, row_of,
+    fmt_size, key_command, row_of, small_menu_items,
 };
 use crate::vm::{Act, Hit, View};
 use hub_core::catalog::find;
@@ -648,6 +648,44 @@ fn the_menu_items_of_an_unknown_app_are_just_the_page() {
     let fx = Fx::new("menu2");
     let v = fx.eng.menu_items("nonesuch");
     assert_eq!(v, vec![(MenuItem::GitHub, "GitHub", true)]);
+}
+
+#[test]
+fn the_small_tile_menu_adds_install_and_keeps_disabled_secondary_entries() {
+    let mut fx = Fx::new("small-install-menu");
+    fx.publish_files("mdedit", "1.0.0", &[("mdedit.exe", body("a"))], None);
+    fx.check();
+    let items = small_menu_items(&fx.app("mdedit"), fx.eng.menu_items("mdedit"));
+    assert_eq!(items[0], (MenuItem::Action(Act::Install), "Install", true));
+    assert!(items.contains(&(MenuItem::Open, "Open", false)));
+    assert!(items.contains(&(MenuItem::ReleaseNotes, "Release notes", true)));
+    assert!(items.contains(&(MenuItem::SkipVersion, "Skip this version", false)));
+    fx.cmd(Cmd::MenuPick("mdedit", items[0].0));
+    fx.settle();
+    assert_eq!(fx.file("mdedit", "mdedit.exe"), Some(body("a")));
+    assert!(
+        !fx.eng.apply(Cmd::MenuPick("mdedit", items[0].0)),
+        "the old Install item is stale"
+    );
+}
+
+#[test]
+fn small_tile_menu_update_asks_for_consent_and_offers_open_only_once() {
+    let mut fx = two_open_updates("small-update-menu");
+    let items = small_menu_items(&fx.app("mdedit"), fx.eng.menu_items("mdedit"));
+    assert_eq!(items[0], (MenuItem::Action(Act::Update), "Update", true));
+    assert_eq!(
+        items.iter().filter(|item| item.0 == MenuItem::Open).count(),
+        1
+    );
+    fx.shell.running.store(true, Ordering::SeqCst);
+    fx.cmd(Cmd::MenuPick("mdedit", items[0].0));
+    assert!(
+        fx.vm().banner.is_some(),
+        "the app opened after the menu was drawn"
+    );
+    assert!(!fx.eng.busy(), "nothing can install without consent");
+    assert_eq!(fx.file("mdedit", "mdedit.exe"), Some(body("a")));
 }
 
 #[test]

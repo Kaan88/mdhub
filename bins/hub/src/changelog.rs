@@ -36,7 +36,6 @@ pub struct Style {
     pub bold: bool,
     pub italic: bool,
     pub code: bool,
-    pub link: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -391,7 +390,8 @@ pub fn inline(s: &str) -> Vec<Span> {
                 i += n;
             }
             '[' | '!' => {
-                // `[text](url)` and `![alt](url)`: the text, as a link.
+                // `[text](url)` and `![alt](url)`: keep the label and its surrounding style,
+                // but not the URL or a link look. Nothing in the notes body is clickable.
                 let start = if c == '!' && cs.get(i + 1) == Some(&'[') {
                     i + 1
                 } else if c == '[' {
@@ -418,13 +418,7 @@ pub fn inline(s: &str) -> Vec<Span> {
                 });
                 match (close, end) {
                     (Some(p), Some(q)) if p > start + 1 && p - start <= 300 => {
-                        emit(&mut out, &mut buf, cur);
-                        let text: String = cs[start + 1..p].iter().collect();
-                        let style = Style { link: true, ..cur };
-                        match out.last_mut() {
-                            Some(l) if l.style == style => l.text.push_str(&text),
-                            _ => out.push(Span { text, style }),
-                        }
+                        buf.extend(cs[start + 1..p].iter());
                         i = q + 1;
                     }
                     _ => {
@@ -462,7 +456,6 @@ pub fn inline(s: &str) -> Vec<Span> {
 pub enum Tone {
     Text,
     Muted,
-    Accent,
     /// Italic: the text colour pulled towards the muted one (the shared fonts have no italic).
     Soft,
 }
@@ -562,11 +555,7 @@ struct Placed {
 }
 
 fn tone_of(style: Style) -> Tone {
-    if style.code {
-        Tone::Text
-    } else if style.link {
-        Tone::Accent
-    } else if style.italic {
+    if !style.code && style.italic {
         Tone::Soft
     } else {
         Tone::Text
@@ -929,7 +918,6 @@ fn tone_color(pal: &Palette, t: Tone) -> Rgb {
     match t {
         Tone::Text => pal.text,
         Tone::Muted => pal.muted,
-        Tone::Accent => blue(pal),
         Tone::Soft => mix(pal.text, pal.muted, 0.45),
     }
 }
@@ -1080,7 +1068,7 @@ pub fn draw_page(
     );
     p.restore(old);
 
-    // The footer: the installed version line, and the release page.
+    // The footer: the installed version line, and the button for the GitHub release.
     p.fill(foot, pal.bar);
     p.fill(Rect::new(foot.x, foot.y, foot.w, px), pal.line);
     let fy = foot.cy();
@@ -1090,7 +1078,7 @@ pub fn draw_page(
         pal,
         foot.right() - 14.0,
         fy,
-        "Release page",
+        "View on GitHub",
         false,
         look(anim, Hit::NotesPage),
     );
@@ -1185,7 +1173,12 @@ pub fn draw_page(
         }
     }
     p.restore(old);
-    if let Some((track, thumb)) = scroll::scrollbar(body, content, body.h, scroll) {
+    // Keep the painted thumb and its hit outside the window's resize band, even at rest.
+    let bar_area = Rect {
+        w: (body.w - mdshared_ui::window::EDGE).max(0.0),
+        ..body
+    };
+    if let Some((track, thumb)) = scroll::scrollbar(bar_area, content, body.h, scroll) {
         scroll::draw_scrollbar_animated(
             p,
             pal,
@@ -1292,9 +1285,9 @@ pub fn bar_drag(lay: &Layout, grab: f32, y: f32) -> Option<f32> {
     })
 }
 
-/// The pointer at (`x`, `y`) is on the scrollbar (track or thumb).
-pub fn on_bar(lay: &Layout, x: f32, y: f32) -> bool {
-    matches!(lay.at(x, y), Hit::NotesTrack | Hit::NotesThumb)
+/// Is the resolved pointer target on the scrollbar (track or thumb)?
+pub fn bar_hit(hit: Hit) -> bool {
+    matches!(hit, Hit::NotesTrack | Hit::NotesThumb)
 }
 
 #[cfg(test)]

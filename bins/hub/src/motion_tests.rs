@@ -122,6 +122,7 @@ fn the_row_menu_draws_start_middle_end_and_exits_without_input() {
     slot.show(Popup::new(
         "mdedit",
         anchor,
+        View::List,
         [(MenuItem::Open, "Open", true)],
     ));
     let start = frame(&mut slot, &mut anim);
@@ -152,6 +153,7 @@ fn the_row_menu_draws_start_middle_end_and_exits_without_input() {
     slot.show(Popup::new(
         "mdedit",
         anchor,
+        View::List,
         [(MenuItem::Open, "Open", true)],
     ));
     anim.set_system_reduced(true);
