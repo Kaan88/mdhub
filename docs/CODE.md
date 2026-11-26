@@ -3,25 +3,26 @@
 ## Layout
 
 ```
-Cargo.toml              workspace; the shared crates pinned by rev (b4b21824, as mdedit pins them)
+Cargo.toml              workspace; the four shared crates pinned at 5665039d08d1e97964685ac3ed6e050b69bac467
 crates/hub-core/src     catalog model manifest state detect check transport install   (no window)
 bins/hub/src            vm view grid panes ui   draw a Vm        demo shot   --shot and its states
-                        glue work app cli trace the window and the engine behind it
+                         glue work app cli trace the window and the engine behind it; motion popup
 tools/                  write-hub-txt.ps1, make-samples.ps1, samples/<app>/hub.txt
 tests/                  shots.sh, shots-check.sh
 .github/workflows/ci.yml
 ```
 
-The shared crates are git dependencies on `Kaan88/markdown-shared-rs`. To move one, change the one
-`rev` in the workspace `Cargo.toml` (all four crates together) on purpose, after running both
-mdedit's and mdview's `tests/shots.sh` before and after the change in the shared repository.
+The shared crates are git dependencies on `Kaan88/markdown-shared-rs`. Move all four `rev`s in
+`Cargo.toml` together. A change to shared itself calls for mdedit's and mdview's shot checks
+there too; a Hub-only pin move does not edit the shared checkout.
 
 ## Build, on this PC
 
 Keep the build away from the other checkouts and keep temp files inside it:
 
 ```bash
-export CARGO_TARGET_DIR=C:/Users/kaank/Desktop/hub-wt/target
+export CARGO_TARGET_DIR=C:/Users/kaank/Desktop/hub-wt/target-shared
+mkdir -p "$CARGO_TARGET_DIR/tmp"
 export TEMP=$CARGO_TARGET_DIR/tmp TMP=$CARGO_TARGET_DIR/tmp
 cargo build --release -p hub
 cargo test --release --workspace
@@ -46,7 +47,9 @@ Every run of the `hub` exe, by hand or from a test, sets all of these, and opens
 ```bash
 export HUB_DATA=C:/Users/kaank/Desktop/hub-wt/scratch/data
 export HUB_PROGRAMS=C:/Users/kaank/Desktop/hub-wt/scratch/programs
+export HUB_PROGRAM_FILES=C:/Users/kaank/Desktop/hub-wt/scratch/program-files
 export HUB_FETCH_ROOT=C:/Users/kaank/Desktop/hub-wt/scratch/github
+cargo build --release -p hub --features test-hooks
 $CARGO_TARGET_DIR/release/hub.exe --behind --no-session --demo main --exit-after-ms 3000 --trace
 ```
 
@@ -58,15 +61,17 @@ while testing.
 ## Shots
 
 ```bash
-hub --shot out.png --demo main --view list --dark --size 1280x800 --scale 1.0
-bash tests/shots.sh target/shots/a        # states x 3 views x 2 themes x 2 sizes = 120 PNGs, ~15 s
-bash tests/shots.sh target/shots/b        # twice: every PNG must be byte-identical
-bash tests/shots-check.sh target/shots/a  # all present, real PNGs, the size their name says
+bash tests/shots.sh "$CARGO_TARGET_DIR/shots/a"
+bash tests/shots.sh "$CARGO_TARGET_DIR/shots/b"
+diff -qr "$CARGO_TARGET_DIR/shots/a" "$CARGO_TARGET_DIR/shots/b" # byte-identical
+bash tests/shots-check.sh "$CARGO_TARGET_DIR/shots/a"
 ```
 
 File names are `<state>-<view>-<theme>-<W>x<H>.png`. `shots.sh` stops when `demo.rs` has a state
 it does not list. A new visible state: add it to `demo.rs` (`NAMES` and `build`), to `DEMOS` in
-`shots.sh`, and look at its shots in both themes. No pixel comparison in CI (fonts differ).
+`shots.sh`, and look at its shots in both themes. Shots use `Policy::Never`: they show the
+settled endpoints, never timed intermediate frames. The motion tests drive a `ManualClock`.
+No cross-machine pixel comparison in CI (fonts differ).
 
 ## The samples are tested
 
@@ -92,5 +97,6 @@ parser would refuse.
 every change that could touch them: build release before and after, run
 `hub --behind --demo main --exit-after-ms 5000 --trace` with the variables above, compare the
 first-frame time and the private memory, and check that the CPU time over an idle stretch is
-zero. If you did not measure, say so and say why the change cannot move them. Budgets: first
-frame under 100 ms, private memory under 30 MiB, no CPU at idle, nothing heavy on launch.
+zero. Compare like-for-like test-hooks builds; `--trace` names when motion begins and settles.
+If you did not measure, say so and say why the change cannot move them. Budgets: first frame
+under 100 ms, private memory under 30 MiB, no CPU at idle, nothing heavy on launch.
