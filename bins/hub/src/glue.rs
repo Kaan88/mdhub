@@ -42,6 +42,8 @@ pub enum Event {
     Running(Vec<(&'static str, bool)>),
     /// A second launch asked for this window (the shell raises it, or makes it).
     Raise,
+    /// Windows' animation effects preference changed.
+    MotionChanged,
     /// The tray icon's menu, its icon or its balloon was used (`tray.rs`). Acted on by the shell.
     Tray(crate::tray::TrayCmd),
     /// Hub's own update, looked at and downloaded on the check's worker.
@@ -1085,7 +1087,9 @@ impl Engine {
                 Status::Ready(s) => format!("{} ({} ready)", env!("CARGO_PKG_VERSION"), s.version),
                 _ => env!("CARGO_PKG_VERSION").to_string(),
             },
-            settings: None,
+            settings: self.fixed.as_ref().and_then(|v| v.settings.clone()),
+            demo_menu: self.fixed.as_ref().is_some_and(|v| v.demo_menu),
+            demo_dropdown: self.fixed.as_ref().is_some_and(|v| v.demo_dropdown),
             notes: self
                 .notes
                 .as_ref()
@@ -2196,7 +2200,7 @@ impl Engine {
     pub fn handle(&mut self, ev: Event) -> bool {
         let now = check::now();
         match ev {
-            Event::Raise | Event::Tray(_) => false,
+            Event::Raise | Event::MotionChanged | Event::Tray(_) => false,
             Event::Hub(h) => self.handle_hub(h),
             Event::Notes {
                 id,

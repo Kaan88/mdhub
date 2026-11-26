@@ -318,3 +318,17 @@ fallback). The app asks before quitting with live tabs. If it hides to the tray,
 The 128 px app icon is from `assets/logo-256.png`; the fallback is Claude clay and `code`.
 Hub's own icon is unchanged (D-024). No release or sample yet; no legacy manifest or self-updater.
 Would change: an installer path or AppId change, or an app-provided safe quit request.
+
+## D-036 Pin shared at 5665039 and adopt its event-driven motion (2026-11-26)
+Moves all four crates together from `b4b21824` to `5665039d08d1e97964685ac3ed6e050b69bac467`,
+superseding D-006's pin but not its no-new-direct-dependency rule. The new lock entries are
+`libloading 0.9.1` (the shared fetcher on non-Windows), `zune-jpeg` and `zune-core` (shared text).
+Refines D-032: hover fades using shared motion, while pressed looks and action state remain
+immediate. Menus and settings use shared presence; notes and views use a content-region
+`PageTransition`; progress uses Fluent movement. Use the single-page form of D-034, not a new
+settings navigation. The form's private dropdown cannot leave visibly on its own, so Hub keeps
+the shared menu in a presence slot and hands its selection back to the form.
+Refines D-014: the loop still sleeps; an animator deadline joins the same one-shot wake as checks
+and close. Reduced motion uses the system setting; shots force settled endpoints. No repeating
+animation and no change to the tray's system menu or balloons. Would change: shared exposing
+dropdown presence through `Form`, or the owner asking for different motion.

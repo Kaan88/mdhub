@@ -24,8 +24,6 @@ makes the settings card one page with no category list (D-034).
   unreleased; its per-user setup never closes the running app, to protect live embedded sessions.
 - `crates/hub-core/tests/samples.rs`: each released app's `tools/samples/<id>/hub.txt` parses and
   round-trips; `NO_SAMPLE` names Barbican and Claude Switch until they gain real release samples.
-- D-035: Windows release checks passed (381 tests, four existing ignores). Full-catalog first-frame
-  median was 201.5 ms before and 203.9 ms after, both over budget; after: 9.4–9.6 MiB, idle CPU 0 ms/2 s.
 - `bins/hub`: the window (`app`, winit + softbuffer, created on demand), its engine (`glue`),
   workers (`work`), `cli`, drawing (`vm view grid panes ui`), `--shot` and `demo`, and the tray
   work: `tray` (icon, system menu, balloon, on a thread of its own), `icon` (the icon and badge
@@ -46,52 +44,50 @@ makes the settings card one page with no category list (D-034).
 - Closing an app (D-025, D-026): the offer bar's yes covers one install; a roll back of an open
   app is not started; a question with no window opens the window.
 - Settings card: start with Windows, tray, notifications, backdrop, check interval, update Hub.
-- Hover and press (D-032): every button lights under the pointer and darkens while held (window
-  buttons, command bar, view switch, offer bar and its X, row and tile buttons, "..." menus, notes
-  page buttons; the "Release notes" link underlines); redrawn only when the control under the
-  pointer changes. The "close it and update" question is a warning (`warn: true`).
+  The shared single-page form stays; its card, switches, segments and interval dropdown animate.
+- D-036: all four shared crates are at `5665039`. Rows, tiles and buttons ease hover; row status
+  and progress animate; list/grid and release-notes content crossfade; the row menu and card
+  enter and exit. The one animation wake is armed only while moving. Reduced motion snaps;
+  shots use settled endpoints. The tray menu and balloon are native, not in-window toasts.
 - Window backdrop (D-033): Off, Mica, Acrylic, `[settings] backdrop`, Off by default, the shared
   `Backdrop` and `Frost`. Frosted: the title row, the command bar, the status bar, only while the
   window has focus; the list and the pane stay opaque. Off draws byte for byte as before. Demos
   `backdrop-mica`, `backdrop-acrylic` show it over a made-up gradient, not what Windows draws.
 - The release notes view (D-028): a page for the selected app's latest version with
   `mdedit 1.2.0 -> 1.2.1` and its date under the text; from the row menu, the pane's "Release
-  notes" link and the key `n`; Esc, Backspace or the arrow go back. `notes` shows at once;
-  `notes.file` is one GET (64 KiB, 10 s) only when the view is opened, kept on disk by app and
+  notes" link and the key `n`; Esc, Backspace or the arrow go back. The one-line `notes` are
+  available without a fetch; `notes.file` is one GET (64 KiB, 10 s) on open, cached by app and
   version; loading, loaded, failed (reason, Try again) and no file are drawn. The scrollbar's thumb
-  drags, a track click pages toward it, the bar widens under the pointer (`notes-bar-active`).
-- Verified 2026-11-24, the three merged for 0.1.4: `cargo fmt --all --check` clean; clippy
-  `-D warnings` clean, workspace and `-p hub --features test-hooks`; `cargo test --release
-  --workspace` 174 (hub, 1 ignored) + 202 (hub-core, 1 ignored) + 2 (samples) passed;
-  `tests/shots.sh` 324 PNGs twice, byte-identical, `shots-check` 0 bad; the backdrop and hover
-  shots looked at in both themes; each branch verified alone before.
-- Budgets measured (release, `--behind`, fresh `HUB_DATA`, 11 runs unless noted):
-  | | now | budget | before the tray work |
+  drags, a track click pages toward it, and the bar eases wider (`notes-bar-active`).
+  A pending offer stays above the notes header (`notes-offer`).
+- On Windows behind other windows: the row menu, grid switch, settings and its dropdown settled
+  after synthetic input; the notes view opened from a local manifest, fetched one local asset
+  and cached it, then closed. Both runs used 0 ms CPU over two seconds after settling.
+- Windows release checks: fmt and both clippy commands clean; 186 Hub + 203 core + 2 sample
+  tests passed, four existing ignores. The ten new tests cover the motion and its behavior;
+  15 targeted reverts in scratch triggered their regression tests.
+- Two local renders of 360 PNGs were byte-identical; `shots-check` reported zero bad. The row menu,
+  interval dropdown and notes offer endpoints were inspected in both themes (not owner approval).
+  The 336 pre-existing shots also match `ed94180` byte for byte.
+- D-036 budgets: seven interleaved Windows runs per build (`--behind --demo main --trace`,
+  release test hooks and fresh scratch roots). Compare against `ed94180`:
+  | | before | now | budget |
   |---|---|---|---|
-  | first frame, window path (`--demo main`) | median 62.3 ms, 53.3 to 87.3 | < 100 ms | 67.7 ms |
-  | private memory, window open | 9.2 MiB, 9.1 to 9.3 | < 30 MiB | 9.2 MiB |
-  | private memory, tray only (9 runs) | 2.9 MiB, 2.9 to 3.0 | < 8 MiB | none |
-  | tray only after 20 open/close cycles | 5.1 to 5.9 MiB, flat at the end | < 8 MiB | none |
-  | window open during the cycles | 9.4 to 10.2 MiB | < 30 MiB | none |
-  | idle CPU over 10 s, tray only / window open | 0 ms / 0 ms | none | 0 |
-  | exe size | 3,441,664 bytes (after the icon and the fixes) | none | 3.18 MB |
-  A 64 KiB notes file lays out in 31 ms once, a scroll frame in 0.16 ms. 0.1.4 against `b432ad4`
-  (0.1.3), 14 runs each, interleaved: first frame median 70.8 ms against 61.8 (58.6 to 93.4 against
-  55.9 to 96.0), the PC's load: 5 more pairs' stage times match (first frame drawn 52.0 to 62.6
-  against 51.8 to 54.3). Private 9.4 to 9.5 MiB in both; exe 3,674,624 bytes against 3,651,584. The
-  frosted path is not timed (a `--behind` window has no focus). Unmeasured: tray-only memory
-  since the tray work, a real window-first start, a real network fetch.
+  | first frame (median, range) | 55.4 ms, 49.8–63.0 | 53.4 ms, 50.7–55.9 | < 100 ms |
+  | private memory (median, range) | 9.5 MiB, 9.3–9.5 | 9.4 MiB, 9.4–9.5 | < 30 MiB |
+  | idle CPU (each sample) | 0 ms / 2 s | 0 ms / 2 s | no idle CPU |
+  | test-hooks exe | 3,691,008 bytes | 4,063,744 bytes | — |
+  A separate initial baseline smoke took 178.1 ms; the paired table is not a worst-case bound.
+  Tray-only memory, focused Mica/Acrylic timing and real network timing were not remeasured.
 
 ## What does not exist
 
-- **Seen live: nothing new.** The Purge and Barbican rows were looked at in a shot, not in a run
-  against real data. The tray icon with its badge, the balloon, the tray menu, an Explorer restart
-  and a click in the settings card were not seen or used by a person. Hover and press were seen in
-  shots only: the pointer wiring in `app.rs` is compiled, not driven by a mouse, and has no test.
+- The Purge and Barbican rows were looked at in a shot, not in a run against real data. The tray
+  icon with its badge, the balloon, the tray menu and an Explorer restart were not seen or used
+  by a person; no human has approved the motion in a running window.
 - A real install, update or roll back of Purge, Barbican or Claude Switch through Hub on this PC.
-- The notes view in a real window: the page's wiring in `app.rs` (wheel, keys, scroll kept per
-  page, the scrollbar's drag, track click and hover) is compiled and read, not run; the arithmetic
-  under it (`changelog::bar_press`, `bar_drag`) is tested. The links are not clickable.
+- Live scroll/drag/track-click through a real notes load have not been tested by a person. The
+  scrollbar arithmetic and page paints/transitions are tested. Markdown links are not clickable.
 - The window made because the offer bar asks (D-025): no test of its wiring in `app.rs`.
 - The backdrop seen live: Mica or Acrylic behind a focused Hub window has not been looked at, and
   the wiring in `app.rs` (sync on focus and on the setting, the key-out at present, the reset for

@@ -1,8 +1,8 @@
 //! Fake Vm states for the pictures and the tests: `hub --shot out.png --demo NAME`.
 //! Everything here is made up; nothing reads this PC.
-use crate::glue::{Phase, Slot, app_vm, close_question};
+use crate::glue::{MenuItem, Phase, Slot, app_vm, close_question};
 use crate::settings;
-use crate::vm::{Act, AppVm, Banner, Hit, NotesState, NotesVm, Pointer, View, Vm};
+use crate::vm::{Act, AppVm, Banner, Hit, Layout, NotesState, NotesVm, Pointer, View, Vm};
 use hub_core::catalog::{CATALOG, CatalogApp};
 use hub_core::model::{Latest, Row};
 
@@ -21,7 +21,10 @@ pub const NAMES: &[&str] = &[
     "settings-general",
     "settings-updates",
     "settings-about",
+    "settings-interval-menu",
+    "row-menu",
     "notes",
+    "notes-offer",
     "notes-loading",
     "notes-failed",
     "notes-nofile",
@@ -49,6 +52,43 @@ pub fn backdrop(name: &str) -> mdshared_app::backdrop::Backdrop {
         "backdrop-mica" => Backdrop::Mica,
         "backdrop-acrylic" => Backdrop::Acrylic,
         _ => Backdrop::Off,
+    }
+}
+
+/// Demo overlays are pictures, not input models. Draw through the same paths as a live
+/// overlay but force the settled endpoint regardless of the user's system settings.
+pub fn draw_overlays(
+    p: &mut mdshared_ui::gfx::Painter,
+    pal: &mdshared_ui::theme::Palette,
+    area: mdshared_ui::gfx::Rect,
+    vm: &Vm,
+    lay: &Layout,
+) {
+    if vm.demo_menu
+        && let Some((anchor, _)) = lay.hits.iter().find(|(_, h)| *h == Hit::Menu(0))
+    {
+        let items = [
+            (MenuItem::Open, "Open", true),
+            (MenuItem::ShowInFolder, "Show in folder", true),
+            (MenuItem::ReleaseNotes, "Release notes", true),
+            (MenuItem::SkipVersion, "Skip this version", false),
+            (MenuItem::GitHub, "GitHub", true),
+        ];
+        crate::popup::Popup::new("mdedit", *anchor, items).draw(
+            p,
+            pal,
+            area,
+            1.0,
+            &mut crate::motion::still(),
+        );
+    }
+    if let Some((rows, page)) = &vm.settings {
+        let mut card = settings::Card::new(rows.clone(), *page);
+        if vm.demo_dropdown {
+            card.layout(p, area);
+            card.open_dropdown(settings::INTERVAL);
+        }
+        card.draw_motion(p, pal, area, 1.0, &mut crate::motion::still());
     }
 }
 
@@ -229,6 +269,16 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
     let r = Some;
     Some(match name {
         "backdrop-mica" | "backdrop-acrylic" => build("main", view)?,
+        "row-menu" => {
+            let mut v = build("main", view)?;
+            v.demo_menu = true;
+            v
+        }
+        "notes-offer" => {
+            let mut v = build("notes", view)?;
+            v.banner = Some(close_question("mdedit"));
+            v
+        }
         "main" => vm(
             vec![
                 app("mdedit", Row::Update, r("1.2.0"), r("1.2.1"), false),
@@ -379,7 +429,7 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
         }
         // The sliders button's card over the main window; the About page with Hub's own update
         // downloaded and its banner showing.
-        "settings-general" | "settings-updates" | "settings-about" => {
+        "settings-general" | "settings-updates" | "settings-about" | "settings-interval-menu" => {
             let about = name == "settings-about";
             let mut v = build(if about { "banner" } else { "main" }, view)?;
             let m = settings::Model {
@@ -402,6 +452,7 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
                 _ => 0,
             };
             v.settings = Some((settings::rows(&m), page));
+            v.demo_dropdown = name == "settings-interval-menu";
             v
         }
         "all" => {

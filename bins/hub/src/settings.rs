@@ -3,9 +3,14 @@
 //! card of the sliders button; the engine (`glue.rs`) applies what it returns and saves it, and
 //! the tray menu changes the same settings, so the card is rebuilt from the engine's rows
 //! whenever they differ from the form's.
+use crate::motion::Overlay;
 use mdshared_app::backdrop::Backdrop;
+use mdshared_ui::anim::{Animator, document, pop};
 use mdshared_ui::gfx::{Painter, Rect};
-use mdshared_ui::settings::{Form, Row};
+use mdshared_ui::keys::{KeyName, Mods};
+use mdshared_ui::menu::{Entrance, Item, Menu};
+use mdshared_ui::overlay::{dialog_bounds, draw_backdrop_presence};
+use mdshared_ui::settings::{Form, Outcome, Row, Style, Value};
 use mdshared_ui::theme::Palette;
 
 /// "Start Hub with Windows" (the Run key).
@@ -123,10 +128,238 @@ pub fn draw_card(p: &mut Painter, pal: &Palette, w: f32, h: f32, rows: Vec<Row>,
     f.draw(p, pal, Rect::new(0.0, 0.0, w, h), false);
 }
 
+/// Keep the shared single-page form for its rows, focus, presses and values. Its built-in
+/// choice menu is private and disappears immediately on dismissal. For non-segmented choices,
+/// hand the opening off to a shared Menu held in a presence slot instead.
+pub struct Card {
+    form: Form,
+    menu: Overlay<ChoiceMenu>,
+    field_press: Option<u32>,
+}
+
+struct ChoiceMenu {
+    id: u32,
+    menu: Menu<usize>,
+    pressed: Option<usize>,
+}
+
+impl Card {
+    pub fn new(rows: Vec<Row>, page: usize) -> Self {
+        let mut form = form(rows, page);
+        let mut style = Style::CLASSIC;
+        style.backdrop = 0.0;
+        form.set_style(style);
+        Self {
+            form,
+            menu: Overlay::new(document::MENU),
+            field_press: None,
+        }
+    }
+
+    pub fn rows(&self) -> &[Row] {
+        self.form.rows()
+    }
+
+    pub fn set_rows(&mut self, rows: Vec<Row>) {
+        self.form.set_rows(rows);
+        self.menu.hide();
+        self.field_press = None;
+    }
+
+    fn dropdown_index(&self, id: u32) -> Option<usize> {
+        self.rows().iter().enumerate().find_map(|(i, row)| {
+            (matches!(row, Row::Choice { id: row_id, .. } if *row_id == id)
+                && !self.form.is_segmented(i))
+            .then_some(i)
+        })
+    }
+
+    fn dropdown_at(&self, x: f32, y: f32) -> Option<u32> {
+        if !self.form.body_rect().contains(x, y) {
+            return None;
+        }
+        self.rows()
+            .iter()
+            .enumerate()
+            .find_map(|(i, row)| match row {
+                Row::Choice { id, .. }
+                    if !self.form.is_segmented(i) && self.form.control_rect(i).contains(x, y) =>
+                {
+                    Some(*id)
+                }
+                _ => None,
+            })
+    }
+
+    pub fn open_dropdown(&mut self, id: u32) {
+        let Some(i) = self.dropdown_index(id) else {
+            return;
+        };
+        let Row::Choice { options, value, .. } = &self.rows()[i] else {
+            return;
+        };
+        let field = self.form.control_rect(i);
+        let items = options
+            .iter()
+            .enumerate()
+            .map(|(k, name)| Item::new(k, name).checked(k == *value))
+            .collect();
+        let mut menu = Menu::new(
+            items,
+            field.right(),
+            field.bottom() + mdshared_ui::dropdown::MENU_GAP,
+            true,
+        );
+        menu.highlight(*value);
+        self.menu.show(ChoiceMenu {
+            id,
+            menu,
+            pressed: None,
+        });
+    }
+
+    fn pick(&mut self, id: u32, pick: Option<usize>) -> Outcome {
+        self.menu.hide();
+        if let Some(index) = pick {
+            let value = Value::Choice(index);
+            if self.form.value(id) != Some(value.clone()) && self.form.set_value(id, value.clone())
+            {
+                return Outcome::Changed { id, value };
+            }
+        }
+        Outcome::Redraw
+    }
+
+    pub fn key(&mut self, key: &KeyName, mods: Mods, typed: Option<&str>) -> Outcome {
+        if let Some(open) = self.menu.input() {
+            match key {
+                KeyName::Escape | KeyName::Tab => self.menu.hide(),
+                KeyName::Up | KeyName::Down => open.menu.step(*key == KeyName::Down),
+                KeyName::Enter | KeyName::Space => {
+                    let (id, pick) = (open.id, open.menu.chosen());
+                    return self.pick(id, pick);
+                }
+                _ => return Outcome::None,
+            }
+            return Outcome::Redraw;
+        }
+        let dropdown = self
+            .form
+            .focus_id()
+            .filter(|id| self.dropdown_index(*id).is_some());
+        let result = self.form.key(key, mods, typed);
+        if let Some(id) = dropdown
+            && matches!(key, KeyName::Enter | KeyName::Space)
+        {
+            // Let shared reveal keyboard focus and activate its control. Esc closes that
+            // private menu, not the card; the replacement uses the same options and geometry.
+            if matches!(result, Outcome::Redraw) {
+                self.form.key(&KeyName::Escape, mods, None);
+                self.open_dropdown(id);
+            }
+        }
+        result
+    }
+
+    pub fn pointer_move(&mut self, x: f32, y: f32) -> bool {
+        match self.menu.input() {
+            Some(open) => open.menu.pointer(x, y),
+            None => self.form.pointer_move(x, y),
+        }
+    }
+
+    pub fn press(&mut self, x: f32, y: f32, mods: Mods, clicks: u8) -> Outcome {
+        self.field_press = None;
+        if let Some(open) = self.menu.input() {
+            if open.menu.contains(x, y) {
+                open.menu.pointer(x, y);
+                open.pressed = open.menu.hover;
+            } else {
+                self.menu.hide();
+            }
+            return Outcome::Redraw;
+        }
+        self.field_press = self.dropdown_at(x, y);
+        self.form.press(x, y, mods, clicks)
+    }
+
+    pub fn release(&mut self, x: f32, y: f32) -> Outcome {
+        if let Some(open) = self.menu.input() {
+            let pressed = open.pressed.take();
+            open.menu.pointer(x, y);
+            if pressed.is_some() && pressed == open.menu.hover {
+                let (id, pick) = (open.id, open.menu.chosen());
+                return self.pick(id, pick);
+            }
+            return Outcome::None;
+        }
+        let result = self.form.release(x, y);
+        if let Some(id) = self.field_press.take()
+            && self.dropdown_at(x, y) == Some(id)
+            && matches!(result, Outcome::Redraw)
+        {
+            self.form.key(&KeyName::Escape, Mods::default(), None);
+            self.open_dropdown(id);
+        }
+        result
+    }
+
+    pub fn wheel(&mut self, x: f32, y: f32, dy: f32) -> bool {
+        match self.menu.input() {
+            Some(open) => open.menu.contains(x, y) && open.menu.scroll_by(dy),
+            None => self.form.wheel(x, y, dy),
+        }
+    }
+
+    pub fn layout(&mut self, p: &mut Painter, area: Rect) {
+        self.form.layout(p, area);
+    }
+
+    pub fn draw_motion(
+        &mut self,
+        p: &mut Painter,
+        pal: &Palette,
+        area: Rect,
+        t: f32,
+        anim: &mut Animator,
+    ) {
+        if t == 0.0 {
+            self.layout(p, area);
+            return;
+        }
+        // If a dropdown sticks out of the card, fade both as a group. Otherwise save only
+        // the card and its shadow. The footprint stays beneath the same hit rectangles.
+        let bounds = if t < 1.0 && !self.menu.is_alive() {
+            dialog_bounds(self.form.layout(p, area))
+        } else {
+            area
+        };
+        draw_backdrop_presence(p, pal, area.w, area.h, t);
+        pop(p, bounds, t, (0.0, 0.0), |p| {
+            self.form
+                .draw_animated(p, pal, area, false, anim, "hub-settings-form");
+            self.menu.draw(anim, "settings-dropdown", |open, t, anim| {
+                open.menu
+                    .draw_entering_with(p, area, t, Entrance::Fade, |p, menu| {
+                        menu.draw_in_animated(
+                            p,
+                            pal,
+                            area,
+                            anim,
+                            ("settings-dropdown-hover", open.id),
+                        );
+                    });
+            });
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mdshared_ui::anim::{Clock, ManualClock};
     use mdshared_ui::settings::Value;
+    use mdshared_ui::theme::{DARK, LIGHT};
 
     fn model() -> Model {
         Model {
@@ -189,5 +422,120 @@ mod tests {
         assert_eq!(f.value(START), Some(Value::Bool(true)));
         assert_eq!(f.value(INTERVAL), Some(Value::Choice(4)));
         assert_eq!(f.value(BACKDROP), Some(Value::Choice(2)));
+    }
+
+    #[test]
+    fn animated_card_at_rest_is_the_shared_single_page_form() {
+        for pal in [LIGHT, DARK] {
+            let (mut bmp, mut gfx) = (
+                mdshared_text::Bitmap::new(860, 600),
+                mdshared_ui::gfx::Gfx::new(),
+            );
+            let area = Rect::new(0.0, 0.0, 860.0, 600.0);
+            let rows = rows(&model());
+            let mut p = Painter::new(&mut bmp, &mut gfx, 1.0);
+            p.fill(area, pal.page);
+            form(rows.clone(), 0).draw(&mut p, &pal, area, false);
+            let old = p.bmp.pixels.clone();
+            p.fill(area, pal.page);
+            let mut anim = crate::motion::still();
+            Card::new(rows, 0).draw_motion(&mut p, &pal, area, 1.0, &mut anim);
+            assert_eq!(p.bmp.pixels, old);
+            assert_eq!(anim.end_frame(), None);
+        }
+    }
+
+    #[test]
+    fn the_card_and_its_dropdown_open_and_close_then_stop_asking_for_frames() {
+        let (mut bmp, mut gfx) = (
+            mdshared_text::Bitmap::new(860, 600),
+            mdshared_ui::gfx::Gfx::new(),
+        );
+        let area = Rect::new(0.0, 0.0, 860.0, 600.0);
+        let mut p = Painter::new(&mut bmp, &mut gfx, 1.0);
+        let clock = ManualClock::new();
+        let mut anim = Animator::new();
+        let mut slot = Overlay::new(document::DIALOG);
+        let mut frame = |slot: &mut Overlay<Card>| {
+            p.fill(area, LIGHT.page);
+            anim.begin_frame(clock.now());
+            slot.draw(&mut anim, "settings-card", |card, t, anim| {
+                card.draw_motion(&mut p, &LIGHT, area, t, anim);
+            });
+            (p.bmp.pixels.clone(), anim.end_frame())
+        };
+        let base = frame(&mut slot);
+        slot.show(Card::new(rows(&model()), 0));
+        let entering = frame(&mut slot);
+        assert_eq!(entering.0, base.0);
+        assert!(entering.1.is_some());
+        for _ in 0..17 {
+            clock.advance_ms(16);
+            frame(&mut slot);
+        }
+        let card = frame(&mut slot);
+        assert_ne!(card.0, base.0);
+        assert_eq!(card.1, None);
+
+        let settings = slot.input().unwrap();
+        let mods = Mods::default();
+        let i = settings.dropdown_index(INTERVAL).unwrap();
+        let r = settings.form.control_rect(i);
+        assert!(matches!(
+            settings.press(r.cx(), r.cy(), mods, 1),
+            Outcome::Redraw
+        ));
+        assert!(matches!(settings.release(r.cx(), r.cy()), Outcome::Redraw));
+        assert!(settings.menu.is_open(), "a click opened the retained menu");
+        assert_eq!(settings.form.focus_id(), Some(INTERVAL));
+        let first = frame(&mut slot);
+        assert!(first.1.is_some());
+        // Focus can update the field; after the first frame the menu must also change pixels.
+        clock.advance_ms(40);
+        assert_ne!(frame(&mut slot).0, first.0);
+        for _ in 0..10 {
+            clock.advance_ms(16);
+            frame(&mut slot);
+        }
+        let open = frame(&mut slot);
+        assert_eq!(open.1, None);
+        let settings = slot.input().unwrap();
+        assert!(matches!(
+            settings.key(&KeyName::Escape, mods, None),
+            Outcome::Redraw
+        ));
+        assert!(!settings.menu.is_open());
+        let closing = frame(&mut slot);
+        assert_eq!(closing.0, open.0);
+        assert!(closing.1.is_some());
+        for _ in 0..12 {
+            clock.advance_ms(16);
+            frame(&mut slot);
+        }
+        assert!(!slot.input().unwrap().menu.is_alive());
+        let settings = slot.input().unwrap();
+        assert!(matches!(
+            settings.key(&KeyName::Enter, mods, None),
+            Outcome::Redraw
+        ));
+        assert!(settings.menu.is_open(), "keyboard opens the same menu");
+        settings.key(&KeyName::Down, mods, None);
+        assert!(matches!(
+            settings.key(&KeyName::Enter, mods, None),
+            Outcome::Changed {
+                id: INTERVAL,
+                value: Value::Choice(2)
+            },
+        ));
+        assert_eq!(settings.form.value(INTERVAL), Some(Value::Choice(2)));
+        assert!(!settings.menu.is_open());
+        slot.hide();
+        assert!(slot.input().is_none());
+        assert!(frame(&mut slot).1.is_some());
+        for _ in 0..12 {
+            clock.advance_ms(16);
+            frame(&mut slot);
+        }
+        assert_eq!(frame(&mut slot), base);
     }
 }

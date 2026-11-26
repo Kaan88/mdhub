@@ -1,10 +1,12 @@
 //! The pane under the list: what the selected app's update brings, how an update is going, what
 //! went wrong, or why there is nothing to install. One simple pane for now: the words on the
 //! left, the details of the release on the right.
+use crate::motion;
 use crate::ui::{self, red};
 use crate::view::PANE_TAB_H;
 use crate::vm::{Hit, Layout, Vm};
 use hub_core::model::Row;
+use mdshared_ui::anim::Animator;
 use mdshared_ui::gfx::{Face, Painter, Rect, Rgb, mix};
 use mdshared_ui::theme::Palette;
 
@@ -20,7 +22,14 @@ pub fn tab_label(row: &Row) -> &'static str {
     }
 }
 
-pub fn draw(p: &mut Painter, pal: &Palette, r: Rect, vm: &Vm, lay: &mut Layout) {
+pub fn draw(
+    p: &mut Painter,
+    pal: &Palette,
+    r: Rect,
+    vm: &Vm,
+    lay: &mut Layout,
+    anim: &mut Animator,
+) {
     p.fill(r, pal.pane);
     let px = p.px().max(1.0);
     p.fill(Rect::new(r.x, r.y, r.w, px), pal.line);
@@ -61,9 +70,9 @@ pub fn draw(p: &mut Painter, pal: &Palette, r: Rect, vm: &Vm, lay: &mut Layout) 
             ui::blue(pal),
         );
         // A link: underlined while the pointer is over it.
-        if vm.pointer.over(Hit::Notes(vm.sel)) {
-            p.fill(Rect::new(lx, cy + 8.0, lw, px), ui::blue(pal));
-        }
+        let hover =
+            motion::button(anim, ("notes-link", a.id), vm.pointer, Hit::Notes(vm.sel)).hover;
+        p.fill_a(Rect::new(lx, cy + 8.0, lw, px), ui::blue(pal), hover);
         lay.hits.push((
             Rect::new(lx - 6.0, r.y + 2.0, lw + 34.0, PANE_TAB_H - 4.0),
             Hit::Notes(vm.sel),

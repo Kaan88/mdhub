@@ -101,9 +101,14 @@ pub fn render_with(
     let lay = view::draw(&mut p, pal, w as f32, h as f32, vm);
     let key = frost::key_for(backdrop, pal);
     let areas = frost::mark_chrome(key.as_ref(), &mut p, &lay.chrome);
-    if let Some((rows, page)) = &vm.settings {
-        crate::settings::draw_card(&mut p, pal, w as f32, h as f32, rows.clone(), *page);
-    }
+    p.set_frost_key(key);
+    demo::draw_overlays(
+        &mut p,
+        pal,
+        mdshared_ui::gfx::Rect::new(0.0, 0.0, w as f32, h as f32),
+        vm,
+        &lay,
+    );
     frost::preview(&mut bmp, &areas, backdrop, pal);
     bmp
 }

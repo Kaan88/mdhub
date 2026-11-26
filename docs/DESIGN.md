@@ -123,29 +123,34 @@ fades it and pulls it to grey. A PNG that does not decode returns `false` and `u
 the catalog's colour and glyph; the title bar's own mark still uses the glyph tile. The badges are
 drawn over the icon as before.
 
-Hover and press (D-032): `Vm.pointer` is a `Pointer { hot, held }`, the `Hit` under the pointer
-and the one the left button went down on. Every button draws from it through `Pointer::look(hit)`:
-the window buttons and the offer bar through the shared `draw_win_button` / `OfferBarState`, the
-command bar's buttons, the sliders button, the view switch and the notes page's back arrow through
-`button_fill` (`ui::quiet_fill`), the accent buttons a step towards the page (`ui::accent_fill`,
-as the shared offer bar does), the row and tile buttons (`ui::sbtn`) a step past `pal.hover` with a
-stronger frame (the row under them is lit too), the "..." menus a step past their row or tile
-(`ui::icon_fill`); the pane's "Release notes" link is underlined. A held control looks pressed only
-while the pointer is still on it. The offer bar's X is a hit of its own (`Hit::BannerClose`, the
-same command as its No) so it lights alone. The engine keeps the pointer (`set_hot`, `set_held`,
-true only on a change); `app.rs` sets it on a move (none on a resize edge, under the card or a
-menu), on leaving, on press and release, on losing focus, and after each frame, and redraws only
-when it changed: nothing runs while the pointer rests. The close question (`glue::close_question`)
-is a warning: `warn: true`, the offer bar's warning sign in place of the download arrow.
+Hover and press (D-032, D-036): `Vm.pointer` holds the hot and pressed `Hit`. Caption and view
+buttons use the shared animated chrome; Hub's buttons, row/tile fills and release-notes link use
+`document::HOVER`. A held control looks pressed only while the pointer is over it. The offer
+bar uses shared `OfferBarState`, blending just the changed button rectangles during fades.
+Per-app tracks use catalog IDs, not filtered row positions. Status labels, dots and badges fade
+in when the row changes phase; text, actions and their targets update immediately. Download
+extent glides with `fluent::MOVE`; progress reports do not restart the status fade.
+
+`motion.rs` keeps the shared `Animator`, a `PageTransition`, and their next wake per window.
+The winit loop takes that deadline alongside its existing check, close and test timers, consumes
+it once when due and schedules nothing further when the animator settles. Minimized or destroyed
+windows don't animate. Windows' Animation effects setting is read at first draw, on focus/theme
+changes and via shared's preference-change wake. No replacement of the tray/window host.
+`PageTransition` snapshots the opaque content below the command/offer strip for list/grid and
+release-notes changes (including the fetched text arriving); command bars and the notes Back
+button stay live. While blending old pixels, Hub withholds hits in the mixed region. A new size,
+scale or region cancels the old snapshot. If an overlay covered the outgoing page, Hub redraws
+that base once so the overlay is not captured. `popup.rs` keeps the catalog context menu in a
+shared presence slot and uses shared menu rendering for placement, hover, entry and exit.
 
 ## bins/hub: demo.rs, shot.rs
 `hub --shot out.png [--size WxH] [--scale N] [--light|--dark] [--view list|large|small] [--demo
 NAME]` renders a `Vm` with no window and no read of this PC. `demo.rs` builds the made-up Vms
 (`main, first-run, updating, failed, done, noinfo, running, banner, all, claude-switch, empty`, the notes and
-settings states, and the pointer states `hover-close hover-min hover-bar hover-primary
+settings states, `row-menu`, and the pointer states `hover-close hover-min hover-bar hover-primary
 pressed-primary hover-open hover-menu close-question close-question-yes close-question-no`);
 `tests/shots.sh`
-renders all of them. A shot is limited to 64 million pixels. `backdrop-mica` and
+renders all of them at their settled endpoints. A shot is limited to 64 million pixels. `backdrop-mica` and
 `backdrop-acrylic` are the main window with its chrome keyed out over a stand-in backdrop
 (`frost::preview`); every other state is drawn with the backdrop off.
 
@@ -176,8 +181,9 @@ key `n`) fills it from the manifest Hub knows and the disk, else starts `work::s
 `Event::Notes {id, version, result}` is taken only by a view still waiting for exactly that
 version (a closed or moved view drops it; the worker has cached it anyway). `Cmd::NotesRetry`
 fetches again from Failed only; `Cmd::NotesPage` opens the release page; Esc and `NotesClose` leave.
-`Vm.notes: Option<NotesVm>` makes `view::draw_full` draw the page instead of the command bar, list
-and pane; `Layout` reports `notes_max_scroll` and `notes_view_h` and new hits `Notes(i)`,
+`Vm.notes: Option<NotesVm>` makes the view draw the page instead of the command bar, list
+and pane. An offer stays above the notes header in its own strip. `Layout` reports
+`notes_max_scroll` and `notes_view_h` and the hits `Notes(i)`,
 `NotesBack`, `NotesRetry`, `NotesPage`, `NotesTrack`, `NotesThumb` (the thumb front-most), and
 `notes_bar` (track, thumb) as drawn. `app.rs` keeps the page's own scroll (the list's is kept
 while it is open): wheel, arrows, PageUp/PageDown/Space, Home/End (`changelog::scrolled`, pure).
@@ -187,7 +193,7 @@ toward it; `bar_drag` puts the thumb's top at pointer y less dy and turns that i
 offset with the shared `scroll::offset_for_thumb`, clamped, None on a closed page or a non-finite
 number. `app.rs` holds `ngrab` from the press to the release (or the window losing focus), and
 sets `NotesVm.bar_active` before each frame while the pointer is on the bar or drags it: the
-shared bar is then drawn wide (as mdedit's).
+shared bar eases between narrow and wide (the hit track and drag maths stay fixed).
 The page: header (back arrow, "Release notes of X", the version), the scrolling body in a column
 at most 740 px wide with the shared overlay scrollbar, a footer with `mdedit 1.2.0 -> 1.2.1`, the
 date and "Release page".
@@ -253,11 +259,17 @@ icon seen live (CLAUDE.md rule 6).
 The rows of the shared `mdshared_ui::settings::Form`: Start Hub with Windows, Show an icon in the
 tray, Tell me when updates are found, Look for updates (Every hour / 6 hours / day / week /
 Never), About line and "Update Hub" (becomes "Restart now" once ready). The engine applies and
-saves a change (`state.rs`); the tray menu changes the same settings and the card is rebuilt
-when its rows differ. Opened by the sliders button (`Hit::Settings`). Shots: `settings-general`,
+saves a change (`state.rs`); the tray menu changes the same settings and the form's rows are
+updated in place when they differ. Opened by the sliders button (`Hit::Settings`). Shots: `settings-general`,
 `settings-updates`, `settings-about` (the last over the banner state). One page (D-034): the
 shared form's `single_page()`, headings in the body and no category list; `page` only scrolls to a
 heading.
+"Card" retains the form only for painting during exit, with input handed back immediately. Its
+backdrop and card fade through shared dialog motion; the form draws with `Form::draw_animated`
+(switches, segments, hover and scrollbar). `Form`'s own dropdown menu cannot be drawn separately
+or kept for exit at this pin. Hub hands non-segmented choice activation off to a shared `Menu`
+in a `Transient`, keeping the form's field, focus, value and saved-setting path. The settings
+dropdown specimen is `settings-interval-menu`.
 "Window backdrop" (Off / Mica / Acrylic, General group, `state.rs` `backdrop`, off by default) is
 the shared `mdshared_app::backdrop::Backdrop`; the window follows it (`frost.rs` below).
 
@@ -269,7 +281,8 @@ start of each frame with the setting, the window's focus and the palette (it ask
 `backdrop_available` and `set_backdrop` only when the setting or the focus changed; off, one
 comparison). While `Frost::key()` is `Some`, `mark_chrome` stamps the chrome's alpha byte after
 the view is drawn and before the row menu or the card, and `present` runs `key_out_areas` over the
-window's copy of the frame (the bitmap keeps what was drawn). A focus change redraws only when
-the setting concerns the frost. `preview` lays a keyed-out frame over a made-up stand-in for the
+window's copy of the frame (the bitmap keeps what was drawn). Popup and dialog fades get the
+same frost key from their painter; the page blend stays out of frosted chrome. `preview` lays a
+keyed-out frame over a made-up stand-in for the
 shots `backdrop-mica` and `backdrop-acrylic`; `shot::render_with(.., Backdrop::Off)` is
 `render`.
