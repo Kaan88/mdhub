@@ -1,10 +1,10 @@
 //! Fake Vm states for the pictures and the tests: `hub --shot out.png --demo NAME`.
 //! Everything here is made up; nothing reads this PC.
-use crate::glue::close_question;
+use crate::glue::{Phase, Slot, app_vm, close_question};
 use crate::settings;
 use crate::vm::{Act, AppVm, Banner, Hit, NotesState, NotesVm, Pointer, View, Vm};
 use hub_core::catalog::{CATALOG, CatalogApp};
-use hub_core::model::Row;
+use hub_core::model::{Latest, Row};
 
 pub const NAMES: &[&str] = &[
     "main",
@@ -16,6 +16,7 @@ pub const NAMES: &[&str] = &[
     "running",
     "banner",
     "all",
+    "claude-switch",
     "empty",
     "settings-general",
     "settings-updates",
@@ -145,6 +146,11 @@ fn app(id: &str, row: Row, installed: Option<&str>, latest: Option<&str>, runnin
             "22 Nov",
             "Mail, calendar, contacts and files in one tray app, with a faster first sync.",
         ),
+        "claude-switch" => (
+            "5.6 MB",
+            "26 Nov",
+            "Open Claude Code sessions in terminal tabs.",
+        ),
         _ => (
             "68.7 MB",
             "17 Nov",
@@ -153,7 +159,13 @@ fn app(id: &str, row: Row, installed: Option<&str>, latest: Option<&str>, runnin
     };
     let file = latest.map_or_else(
         || "not known".to_string(),
-        |l| format!("{}-{l}-windows-x86_64.exe", c.id),
+        |l| {
+            if c.id == "claude-switch" {
+                "claude-switch-setup.exe".to_string()
+            } else {
+                format!("{}-{l}-windows-x86_64.exe", c.id)
+            }
+        },
     );
     let mut details = vec![
         ("Installs".to_string(), file),
@@ -434,6 +446,16 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
                 .collect();
             vm(apps, 2, view)
         }
+        "claude-switch" => {
+            let mut v = build("main", view)?;
+            v.apps.extend([
+                app("purge", Row::NotInstalled, None, r("0.1.0"), false),
+                unreleased("barbican"),
+                unreleased("claude-switch"),
+            ]);
+            v.sel = v.apps.len() - 1;
+            v
+        }
         "empty" => vm(Vec::new(), 0, view),
         // The release notes view of mdedit (1.2.0 installed, 1.2.1 the latest): loaded, still
         // loading, failed (the one line stays), a release with no notes file, a long one, and the long
@@ -505,4 +527,36 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
         }
         _ => return None,
     })
+}
+
+fn unreleased(id: &str) -> AppVm {
+    app_vm(
+        &Slot {
+            app: cat(id),
+            installed: None,
+            latest: Latest::NoManifest("No release information".into()),
+            skipped: None,
+            running: false,
+            phase: Phase::Idle,
+        },
+        0,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claude_switch_demo_shows_the_full_catalog_and_selects_the_unreleased_app() {
+        let vm = build("claude-switch", View::List).unwrap();
+        let ids: Vec<_> = vm.apps.iter().map(|app| app.id).collect();
+        assert_eq!(ids, CATALOG.map(|app| app.id));
+        let selected = &vm.apps[vm.sel];
+        assert_eq!(selected.id, "claude-switch");
+        assert!(matches!(selected.row, Row::NoInfo(_)));
+        assert!(selected.installed.is_none() && selected.latest.is_none());
+        assert!(selected.notes.is_empty());
+        assert!(!selected.details.iter().any(|(key, _)| key == "Installs"));
+    }
 }

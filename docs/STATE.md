@@ -12,17 +12,20 @@ fix for updating an open Inbound or Sprawl (D-029) is not yet confirmed on the o
 three branches merged on `release/0.1.4`; none of the three was tried in a real window. 0.1.5
 makes the settings card one page with no category list (D-034).
 
-## On `main`, committed
+## In this checkout
 
-- `crates/hub-core`: the catalog, six apps compiled in (D-030 Purge, D-031 Barbican), model, `hub.txt`
+- `crates/hub-core`: seven apps compiled in (D-035 Claude Switch), model, `hub.txt`
   parser and writer plus the legacy stopgap, Hub's own files (`state.rs`), detection, checking,
   transport, installing, and the tray work: `autostart` (Run key), `selfupdate` (Hub's own update),
   `notify` (balloon text and memory).
 - Purge: per-machine Inno, `wait` `purge-engine.exe` and `purge-broker.exe`, `setup_closes_app`;
   its v0.1.0 carries `hub.txt`. Barbican: per-user Inno, `setup_closes_app`; **no release** yet, so
-  its row shows "no release information" and Hub offers no install for it.
+  its row shows "no release information" and Hub offers no install for it. Claude Switch is also
+  unreleased; its per-user setup never closes the running app, to protect live embedded sessions.
 - `crates/hub-core/tests/samples.rs`: each released app's `tools/samples/<id>/hub.txt` parses and
-  round-trips; `NO_SAMPLE` names Barbican, and the test fails if it gains a sample.
+  round-trips; `NO_SAMPLE` names Barbican and Claude Switch until they gain real release samples.
+- D-035: Windows release checks passed (381 tests, four existing ignores). Full-catalog first-frame
+  median was 201.5 ms before and 203.9 ms after, both over budget; after: 9.4–9.6 MiB, idle CPU 0 ms/2 s.
 - `bins/hub`: the window (`app`, winit + softbuffer, created on demand), its engine (`glue`),
   workers (`work`), `cli`, drawing (`vm view grid panes ui`), `--shot` and `demo`, and the tray
   work: `tray` (icon, system menu, balloon, on a thread of its own), `icon` (the icon and badge
@@ -61,7 +64,7 @@ makes the settings card one page with no category list (D-034).
   `-D warnings` clean, workspace and `-p hub --features test-hooks`; `cargo test --release
   --workspace` 174 (hub, 1 ignored) + 202 (hub-core, 1 ignored) + 2 (samples) passed;
   `tests/shots.sh` 324 PNGs twice, byte-identical, `shots-check` 0 bad; the backdrop and hover
-  shots looked at in both themes; each branch verified alone before. The repository 2026-11-22.
+  shots looked at in both themes; each branch verified alone before.
 - Budgets measured (release, `--behind`, fresh `HUB_DATA`, 11 runs unless noted):
   | | now | budget | before the tray work |
   |---|---|---|---|
@@ -85,12 +88,11 @@ makes the settings card one page with no category list (D-034).
   against real data. The tray icon with its badge, the balloon, the tray menu, an Explorer restart
   and a click in the settings card were not seen or used by a person. Hover and press were seen in
   shots only: the pointer wiring in `app.rs` is compiled, not driven by a mouse, and has no test.
-- An install, update or roll back of Purge or Barbican run by Hub on this PC: neither has been
-  installed by it (CLAUDE.md rule 4 keeps that off this machine); Barbican has no release.
+- A real install, update or roll back of Purge, Barbican or Claude Switch through Hub on this PC.
 - The notes view in a real window: the page's wiring in `app.rs` (wheel, keys, scroll kept per
   page, the scrollbar's drag, track click and hover) is compiled and read, not run; the arithmetic
   under it (`changelog::bar_press`, `bar_drag`) is tested. The links are not clickable.
-- The window made because the offer bar asks (D-025): its wiring in `app.rs` has no test.
+- The window made because the offer bar asks (D-025): no test of its wiring in `app.rs`.
 - The backdrop seen live: Mica or Acrylic behind a focused Hub window has not been looked at, and
   the wiring in `app.rs` (sync on focus and on the setting, the key-out at present, the reset for
   a new window) is compiled and read, not covered by a test.
@@ -100,8 +102,8 @@ makes the settings card one page with no category list (D-034).
 - Streaming downloads with resume, free-space check (D-005): whole bodies in memory. Zip installs
   (refused), uninstalling from Hub, roll back of setup installs, skipping a version, the
   pre-release channel.
-- The `close` request for mdedit and mdview, the `managed-by` stand-down (D-007), and every app
-  change in `docs/APP-CHANGES.md`: proposals, applied to nothing.
+- The `close` request for mdedit and mdview, the `managed-by` stand-down (D-007), and the other
+  proposals in `docs/APP-CHANGES.md`.
 - Linux and macOS (the window is Windows-only; `--shot` works everywhere).
 
 ## Known wrong, or at risk
@@ -122,14 +124,13 @@ makes the settings card one page with no category list (D-034).
   code, not seen).
 - Barbican's own updater does not stand down for Hub and neither does Purge's (D-007 not built):
   until it does, an app's updater and Hub could both offer the same update.
-- Barbican shows "no release information" until its first release carries `hub.txt`; its catalog
-  entry was written from its installer branch and is unproven against a real release.
+- Barbican and Claude Switch show "no release information" until their first releases carry
+  `hub.txt`; neither entry has been verified against a published installer.
 - Inbound's `latest` is fragile (`android-v0.0.9` sorts newer than `v0.9.0`); Sprawl and Inbound
   show "no release information" until their next release carries `hub.txt`; mdedit and mdview use
   the stopgap (D-003); Purge 0.1.0 has `hub.txt` (D-030).
 - The catalog's `wait` list for Inbound lacks `DownloadManager.Server.exe` and `inbound-torrent.exe`.
-- A download is a memory spike of the file's size during an install (68.7 MiB for Inbound): the
-  30 MiB budget holds at rest only. Samples have CRLF in a Windows checkout, no `.gitattributes`.
+- Downloads spike memory by the file's size (68.7 MiB for Inbound); the 30 MiB budget is for idle.
 
 ## Reviewed, and by whom
 
@@ -145,5 +146,4 @@ makes the settings card one page with no category list (D-034).
 1. Look at the tray, the balloon, the card and Mica / Acrylic live on Windows, once, briefly.
 2. The by-hand pass (plan section 12): a real install and update of Purge (elevated) through Hub, an
    app updated while open, Explorer restarted under the tray.
-3. Barbican's first release, which brings its `hub.txt`, its sample and its updater standing down.
-4. The owner reads `docs/APP-CHANGES.md` and decides.
+3. First releases of Barbican and Claude Switch: verify their `hub.txt` and add real samples.

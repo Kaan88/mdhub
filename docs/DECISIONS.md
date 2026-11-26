@@ -306,3 +306,15 @@ in the body, there is no list on the left, and the card is 600 px wide. Opening 
 (`settings::form`'s `page`, the tray's way in) scrolls to that heading, which on a card that fits
 whole changes nothing. Replaces D-023, whose list marked a group but swapped no page. Would change:
 the card growing past one screen, where a list to jump with earns its room again.
+
+## D-035 Claude Switch is the seventh catalog app
+The owner adds `Kaan88/claude-switch`, extending the catalog scope of D-031. It ships only
+`claude-switch.exe` in its per-user Inno setup (`%LOCALAPPDATA%\Programs\Claude Switch`,
+uninstall key `{4F2C369B-84AF-4A46-AE8B-D22103025F78}_is1`), with no helper exes in `wait`.
+Closing Switch ends the live programs in its embedded terminals. Inno explicitly sets
+`CloseApplications=no`, so Hub leaves `setup_closes_app` false: after consent it asks visible
+windows to close and will not run Setup while Switch remains open (D-010, D-025; no D-029
+fallback). The app asks before quitting with live tabs. If it hides to the tray, quit there.
+The 128 px app icon is from `assets/logo-256.png`; the fallback is Claude clay and `code`.
+Hub's own icon is unchanged (D-024). No release or sample yet; no legacy manifest or self-updater.
+Would change: an installer path or AppId change, or an app-provided safe quit request.

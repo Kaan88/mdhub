@@ -22,13 +22,16 @@ window draws a `Vm` and returns what a pointer can hit; `glue.rs` is the only pl
 them, so every behaviour is tested without a window.
 
 ## catalog.rs
-Six `CatalogApp` constants (mdedit, mdview, Sprawl, Inbound, Purge, Barbican): id, name, blurb, repository under `Kaan88`, exe (relative; Inbound's
+Seven `CatalogApp` entries (mdedit, mdview, Sprawl, Inbound, Purge, Barbican, Claude Switch):
+id, name, blurb, repository under `Kaan88`, exe (relative; Inbound's
 is `app\DownloadManager.Host.exe`), launch args (`--open` for Inbound), folder under
 `%LOCALAPPDATA%\Programs`, machine folder (Sprawl, Purge), Inno uninstall keys, `wait` (executables that
 must be gone before an install), `setup_closes_app` (Sprawl, Inbound, Purge, Barbican; D-029), the legacy manifest file name (mdedit, mdview), tile colour and
 glyph. `latest_url(file)` and `url_allowed(url)` (a manifest may name only
 `https://github.com/Kaan88/<repo>/releases/download/...`). Adding an app is an entry and a
-release of Hub.
+release of Hub. Claude Switch is per-user and has no installed helper exes or legacy manifest.
+Its installer does not close the app: the live programs in its terminal tabs end at quit, so
+Hub uses the normal wait-for-exit path (D-035).
 
 ## model.rs
 The types the others share: `Installed {folder, exe, version, source, kind}` with `Source`
@@ -138,7 +141,7 @@ is a warning: `warn: true`, the offer bar's warning sign in place of the downloa
 ## bins/hub: demo.rs, shot.rs
 `hub --shot out.png [--size WxH] [--scale N] [--light|--dark] [--view list|large|small] [--demo
 NAME]` renders a `Vm` with no window and no read of this PC. `demo.rs` builds the made-up Vms
-(`main, first-run, updating, failed, done, noinfo, running, banner, all, empty`, the notes and
+(`main, first-run, updating, failed, done, noinfo, running, banner, all, claude-switch, empty`, the notes and
 settings states, and the pointer states `hover-close hover-min hover-bar hover-primary
 pressed-primary hover-open hover-menu close-question close-question-yes close-question-no`);
 `tests/shots.sh`

@@ -8,10 +8,9 @@ use hub_core::manifest::{parse, write};
 
 const SAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tools/samples/");
 
-/// Catalog apps with no release to take a sample from. Barbican's installer is unreleased
-/// (D-031), so it has no `hub.txt` and no sample. Adding an app here is a deliberate act, and the
-/// test below fails if the app does have a sample after all.
-const NO_SAMPLE: [&str; 1] = ["barbican"];
+/// Catalog apps with no release to take a sample from (D-031, D-035). The test below fails if
+/// an app listed here gains a sample.
+const NO_SAMPLE: [&str; 2] = ["barbican", "claude-switch"];
 
 #[test]
 fn every_catalog_apps_sample_parses_and_round_trips() {

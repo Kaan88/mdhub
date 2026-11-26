@@ -14,7 +14,8 @@ Fixed already (do not change signatures without saying so in your report): `cata
   duplicates, unknown keys refused (platform-prefixed keys of the six known platforms are
   accepted and kept), https only, every URL must satisfy `app.url_allowed`, lower-case 64-hex
   sha256, sizes numeric, file names plain, `exe`/`wait` relative with no `..`, `silent` args from
-  `[A-Za-z0-9 /=_.:-]` only, `app` must equal `app.id`. NEVER panic on any input.
+  `[A-Za-z0-9 /=_.:-]` only, `app` must equal `app.id` (including a dash in `claude-switch`).
+  NEVER panic on any input.
 - `pub fn from_legacy(bytes: &[u8], app: &CatalogApp) -> Result<HubManifest, String>`: stopgap for
   mdedit/mdview's format 1/2 manifests via `mdshared_app::update::UpdateManifest`; yields a
   `Kind::Files` windows-x86_64 entry (exe + engine + extras as `FileSpec`s, size 0), `exe` =
