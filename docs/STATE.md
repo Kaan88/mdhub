@@ -4,8 +4,8 @@ Current checkout only; `git log` is the history.
 
 ## Release and scope
 
-- Latest Hub release: **v0.1.5**, `Kaan88/mdhub`. Its Windows installer, `hub.exe`,
-  `hub-update.txt` and `hub.txt` are published. The changes below are not released.
+- Latest Hub release: **v0.1.6**, `Kaan88/mdhub`. Its Windows installer, `hub.exe`,
+  `hub-update.txt` and `hub.txt` are published from the tag; everything below is in it.
   The owner previously verified an installed copy and the v0.1.0 → v0.1.1 self-update.
 - Seven compiled-in apps: mdedit, mdview, Sprawl, Inbound, Purge, Barbican and Claude Switch
   (D-035). Checked-in manifests under `tools/samples/` parse and round-trip. Barbican and
