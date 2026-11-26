@@ -347,3 +347,27 @@ and does not replace saved placement; demos and shots do not use it. The extra 6
 let the seven-app list show its details pane above the status bar; no padding change was needed.
 Would change: evidence that a visible title bar is not enough to recover the window after a
 display change, or a catalog large enough to need a different default layout.
+
+## D-038 A pointer button activates on release over the same semantic target
+Refines D-032/D-036: press lights the control; moving off it and releasing cancels. Dragging the
+title, resizing and scrollbar track/thumb gestures still start on press. Row actions are keyed by
+app ID and action, and offer controls by owner, release version and issuance, not by a row index
+or the painted Yes slot. Resolve the release against the painted frame and the live engine;
+focus loss or target replacement disarms it. This preserves D-025: a replacement prompt never
+inherits consent. Row menus likewise require the same choice at press and release. Would change:
+an explicit new gesture that needs to act on press.
+
+## D-039 Notes owns its keyboard; the app filter stays available at every window width
+Refines D-028: notes keeps the background selection, drops filter focus and consumes keys before
+the hidden app list. Tab and Shift+Tab reach Back, Try again when available, and the release page;
+Enter activates only the focused notes control. Ctrl+F or the compact search button opens the
+filter below 900 logical px; Clear stays visible while a query is active and Esc in the field
+clears before blurring. The filter affects what is shown, not the scope of Update all (D-021).
+Would change: a different keyboard focus model across the notes and list or a visible-only bulk
+action with a separate name.
+
+## D-040 The app-close offer uses Hub's warning colours
+Replaces D-032's deferred warning tint. Hub passes a local palette copy to the shared offer painter,
+using `warn_bg` for the background and `warn` for the muted ink on that offer only. The wording
+states the consequence (“Updating … will close it.”); the consent buttons and Hub's restart offer
+are unchanged. Would change: shared offering the same opt-in warning style.

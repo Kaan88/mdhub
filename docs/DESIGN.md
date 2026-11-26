@@ -112,7 +112,14 @@ selection; view; offer bar; status text; a busy text); `draw(painter, palette, w
 Layout` paints the title row, command bar, the list or the grid (large tiles carry versions,
 status and one action; small tiles an icon, a name and one word), the pane under it ("What's
 new" and the details of the release) and the status bar, and returns every hit rect. Drawn with
-`mdshared-ui` (frameless title, buttons, theme `LIGHT`/`DARK`). Every number is a constant.
+`mdshared-ui` (frameless title, buttons, theme `LIGHT`/`DARK`). The title uses the live maximized
+state to choose Maximize or Restore; offscreen demos start unmaximized unless specified.
+The list drops Installed and Latest together when they would leave less than 110 logical px of
+name text after the icon and gutters. The column starts determine the heads, cells and action
+strip; the list publishes the button rectangles returned by the painter, clipped to the strip
+and visible row body. In the footer the globe and Hub version keep their slots. A privacy line
+is drawn only whole; if it will not fit beside the full notice and version, it goes away before
+the variable notice is elided.
 
 `appicon.rs`: each catalog app's own icon (`assets/apps/<id>.png`, 128 px, `include_bytes!`).
 `ui::app_tile` calls `appicon::draw`, which decodes the PNG on the first draw that needs it
@@ -123,10 +130,12 @@ fades it and pulls it to grey. A PNG that does not decode returns `false` and `u
 the catalog's colour and glyph; the title bar's own mark still uses the glyph tile. The badges are
 drawn over the icon as before.
 
-Hover and press (D-032, D-036): `Vm.pointer` holds the hot and pressed `Hit`. Caption and view
+Hover and press (D-032, D-036, D-038): `Vm.pointer` holds the hot and pressed `Hit`. Caption and view
 buttons use the shared animated chrome; Hub's buttons, row/tile fills and release-notes link use
 `document::HOVER`. A held control looks pressed only while the pointer is over it. The offer
-bar uses shared `OfferBarState`, blending just the changed button rectangles during fades.
+bar uses shared `OfferBarState`, blending just the changed button rectangles during fades. For an
+app-close question only, Hub passes the shared painter a local palette copy with `bar = warn_bg`
+and `muted = warn`; the restart offer uses the ordinary palette.
 Per-app tracks use catalog IDs, not filtered row positions. Status labels, dots and badges fade
 in when the row changes phase; text, actions and their targets update immediately. Download
 extent glides with `fluent::MOVE`; progress reports do not restart the status fade.
@@ -148,8 +157,9 @@ shared presence slot and uses shared menu rendering for placement, hover, entry 
 NAME]` renders a `Vm` with no window and no read of this PC. `demo.rs` builds the made-up Vms
 (`main, first-run, updating, failed, done, noinfo, running, banner, all, claude-switch, empty`, the notes and
 settings states, `row-menu`, and the pointer states `hover-close hover-min hover-bar hover-primary
-pressed-primary hover-open hover-menu close-question close-question-yes close-question-no`);
-`tests/shots.sh`
+pressed-primary hover-open hover-menu close-question close-question-yes close-question-no`,
+the three `notes-focus-*` stops, `filter-results`, `filter-edit`, `filter-no-matches`,
+`narrow-columns`, `narrow-long-notice`, and `maximized-chrome`). `tests/shots.sh`
 renders all of them at their settled endpoints. A shot is limited to 64 million pixels. `backdrop-mica` and
 `backdrop-acrylic` are the main window with its chrome keyed out over a stand-in backdrop
 (`frost::preview`); every other state is drawn with the backdrop off.
@@ -163,6 +173,21 @@ for, both for tests. `app.rs`: winit and softbuffer, a frameless window, a loop 
 CPU at idle). `cli.rs`: `--behind --no-session --exit-after-ms --trace --demo --check-now --size
 --light/--dark --view`; `HUB_FIRST_CHECK_MS` sets the first check's delay (default 2 minutes).
 `trace.rs`: `--trace` prints stage times, memory and CPU time.
+
+Release activation (D-038): drag/resize and notes scrollbar gestures start on press. Other window
+controls arm on press. The release must hit the same semantic target in the last painted layout
+and that target must still exist in the engine. App controls use app ID and action rather than
+filtered indices. Offers include their owner, release version and issuance serial, so a late
+release cannot answer a replacement even before it has been painted. Focus loss or a target
+removed by a model/layout change disarms the button. Row-menu choices also require press and
+release on the same choice; the settings form keeps its own press/release handling.
+
+Filtering: the wide toolbar always shows the field; under 900 logical px the search button opens
+it, as does Ctrl+F. The toolbar shows Clear while a query is active; an empty result says why.
+Esc in the field clears the query first, then leaves the field, rather than dismissing an offer.
+While editing at a narrow width, the field takes priority if the left commands do not fit.
+`Vm.updates` and Update all use the same catalog-wide eligibility; the grid summary counts only
+visible apps.
 
 Window placement (D-037): `placement.rs` works from the current monitor work areas and DPI.
 `[window] placement` stores the normal outer origin in physical desktop pixels (including
@@ -192,7 +217,11 @@ The engine (`glue.rs`) holds `notes: Option<NotesOpen>`: `Cmd::OpenNotes` (pane 
 key `n`) fills it from the manifest Hub knows and the disk, else starts `work::spawn_notes`, whose
 `Event::Notes {id, version, result}` is taken only by a view still waiting for exactly that
 version (a closed or moved view drops it; the worker has cached it anyway). `Cmd::NotesRetry`
-fetches again from Failed only; `Cmd::NotesPage` opens the release page; Esc and `NotesClose` leave.
+fetches again from Failed only; `Cmd::NotesPage` opens the release page. Notes clears the filter's
+focus on open without clearing its query or selection. Its exclusive key scope keeps Esc and
+Backspace for Back, Tab/Shift+Tab cycle Back, Try again (when failed) and the release-page button,
+and Enter acts only on the focused notes control. The focus mark uses that control's painted hit
+rectangle; focusing Retry reveals it if the failure text pushed it below the viewport.
 `Vm.notes: Option<NotesVm>` makes the view draw the page instead of the command bar, list
 and pane. An offer stays above the notes header in its own strip. `Layout` reports
 `notes_max_scroll` and `notes_view_h` and the hits `Notes(i)`,
