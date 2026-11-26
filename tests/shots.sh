@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Renders Hub's screenshot set with --shot into the directory given as the only argument: every
-# demo state (bins/hub/src/demo.rs) x list / large / small x light / dark x 1280x800 and 860x600.
+# demo state (bins/hub/src/demo.rs) x list / large / small x light / dark x 1280x800 and 860x660.
 # Run it twice into two directories and compare: every PNG must be byte-identical.
 #
 #   tests/shots.sh target/shots/a
@@ -25,14 +25,17 @@ exe="$t/release/hub.exe"
 DEMOS="main first-run updating failed done noinfo running banner all claude-switch empty settings-general settings-updates settings-about notes notes-loading notes-failed notes-nofile notes-long notes-bar-active hover-close hover-min hover-bar hover-primary pressed-primary hover-open hover-menu close-question close-question-yes close-question-no backdrop-mica backdrop-acrylic"
 VIEWS="list large small"
 THEMES="light dark"
-SIZES="1280x800 860x600"
+SIZES="1280x800 860x660"
 
 mkdir -p "$out"
 export HUB_DATA="$out/.hub-data"
-mkdir -p "$HUB_DATA"
+export HUB_PROGRAMS="${HUB_PROGRAMS:-$out/.programs}"
+export HUB_PROGRAM_FILES="${HUB_PROGRAM_FILES:-$out/.program-files}"
+export HUB_FETCH_ROOT="${HUB_FETCH_ROOT:-$out/.fetch}"
+mkdir -p "$HUB_DATA" "$HUB_PROGRAMS" "$HUB_PROGRAM_FILES" "$HUB_FETCH_ROOT"
 
 # The names demo.rs knows, from the program's own refusal of an unknown one ("try: a, b, c").
-known="$("$exe" --shot "$out/.probe.png" --demo __unknown__ 2>&1 >/dev/null | sed -n 's/.*try: //p' | tr -d '\r' | tr ',' ' ' | xargs -n1 | sort | tr '\n' ' ' || true)"
+known="$("$exe" --behind --shot "$out/.probe.png" --demo __unknown__ 2>&1 >/dev/null | sed -n 's/.*try: //p' | tr -d '\r' | tr ',' ' ' | xargs -n1 | sort | tr '\n' ' ' || true)"
 mine="$(printf '%s\n' $DEMOS | sort | tr '\n' ' ')"
 rm -f "$out/.probe.png"
 if [ -n "$known" ] && [ "$known" != "$mine" ]; then
@@ -49,7 +52,7 @@ for demo in $DEMOS; do
         for theme in $THEMES; do
             for size in $SIZES; do
                 # The scale is pinned, so the system's display scale cannot change the pictures.
-                "$exe" --shot "$out/$demo-$view-$theme-$size.png" --demo "$demo" --view "$view" \
+                "$exe" --behind --shot "$out/$demo-$view-$theme-$size.png" --demo "$demo" --view "$view" \
                     --"$theme" --size "$size" --scale 1.0
                 n=$((n + 1))
             done

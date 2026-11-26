@@ -24,6 +24,8 @@ mod glue;
 mod grid;
 mod icon;
 mod panes;
+#[cfg(any(windows, test))]
+mod placement;
 mod settings;
 mod shot;
 mod trace;
