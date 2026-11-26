@@ -31,6 +31,9 @@ makes the settings card one page with no category list (D-034).
 - Tray: closing the window keeps Hub in the tray, "Quit Hub" / `hub --quit` ends it; `--tray`
   starts with no window, first check 2 minutes later; badge; one balloon per check that found
   something (D-021); re-added on `TaskbarCreated`. Start with Windows: Run key, off (D-020).
+- Window (D-037): 860×660 logical by default, enough for seven list rows, the details pane and the
+  footer. Close-to-tray and quit save position, logical client size and maximized state in
+  `settings.ini`; restore uses the current monitor work areas. `--size` and shots are independent.
 - Self-update (D-022): checked first, staged, swapped last, restart; works only for an installed
   copy, where it ran once (0.1.0 to 0.1.1, by the owner).
 - The installer (`packaging/windows/hub.iss`, Inno, per user) and the workflows `ci` and `release`:
@@ -79,6 +82,15 @@ makes the settings card one page with no category list (D-034).
   | test-hooks exe | 3,691,008 bytes | 4,063,744 bytes | — |
   A separate initial baseline smoke took 178.1 ms; the paired table is not a worst-case bound.
   Tray-only memory, focused Mica/Acrylic timing and real network timing were not remeasured.
+
+- Windows release checks for D-037: fmt, both clippy runs, 389 tests passed with four existing
+  ignores; all eight new tests caught deliberate regressions. The two sets of 336 shots were
+  byte-identical and passed `shots-check`; list, grids and settings were reviewed in both themes.
+  Scratch Windows runs verified tray reopen, restart, maximize, off-screen fallback and CLI
+  override. Physical monitor changes and mixed DPI were not tested on hardware.
+- D-037 `--trace`, seven paired runs per path: first-frame median 185.3 → 190.9 ms (demo) and
+  215.5 → 223.3 ms (normal startup with a saved rectangle), both already over the 100 ms budget.
+  Private memory 9.4–9.6 → 9.8–10.1 MiB; after: 0 ms CPU in every 2 s idle sample.
 
 ## What does not exist
 

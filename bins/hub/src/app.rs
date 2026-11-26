@@ -8,6 +8,7 @@ use crate::glue::{
     self, Cmd, Deps, Engine, Event, Key, Post, RealShell, Tmpl, command, key_command, repeatable,
 };
 use crate::motion::{self, Overlay, Painted, WindowMotion};
+use crate::placement::{DEFAULT_SIZE, MIN_SIZE, windows as placement};
 use crate::popup::Popup;
 use crate::settings;
 use crate::trace::Trace;
@@ -16,7 +17,7 @@ use crate::view::{self, HEAD_H, ROW_H};
 use crate::vm::{Hit, Layout, View, Vm};
 use hub_core::check;
 use hub_core::selfupdate;
-use hub_core::state::Store;
+use hub_core::state::{Store, WindowPlacement};
 use mdshared_text::bitmap::Bitmap;
 use mdshared_ui::anim::document;
 use mdshared_ui::gfx::{Gfx, Painter, Rect};
@@ -29,15 +30,13 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
+use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WKey, ModifiersState, NamedKey};
 use winit::platform::windows::WindowAttributesExtWindows;
 use winit::window::{CursorIcon, ResizeDirection, Window, WindowId, WindowLevel};
 
-const DEFAULT_SIZE: (u32, u32) = (860, 600);
-const MIN_SIZE: (u32, u32) = (520, 360);
 /// The longest the loop sleeps in one go: a clock that jumped (sleep, resume) is noticed.
 const MAX_SLEEP: Duration = Duration::from_secs(30 * 60);
 /// At most this often are the running apps looked up again on a focus change.
@@ -61,6 +60,8 @@ struct App {
     trace: Trace,
     engine: Engine,
     window: Option<Rc<Window>>,
+    /// Last normal rectangle and last non-minimized state, also kept between tray openings.
+    placement: Option<WindowPlacement>,
     surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
     bmp: Bitmap,
     /// Fonts and glyph caches: made with the first frame of a window, dropped with the window,
@@ -833,7 +834,9 @@ impl ApplicationHandler<Event> for App {
         match event {
             WindowEvent::CloseRequested => self.request_close(),
             WindowEvent::RedrawRequested => self.draw(),
+            WindowEvent::Moved(_) => self.remember_window_placement(),
             WindowEvent::Resized(_) => {
+                self.remember_window_placement();
                 self.dirty = true;
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -1016,22 +1019,51 @@ impl ApplicationHandler<Event> for App {
 }
 
 impl App {
+    fn keeps_placement(&self) -> bool {
+        self.args.size.is_none() && !self.engine.is_demo()
+    }
+
+    fn remember_window_placement(&mut self) {
+        if self.keeps_placement()
+            && let Some(w) = &self.window
+            && let Some(h) = hwnd(w)
+        {
+            self.placement = placement::observe(w, h, self.placement);
+        }
+    }
+
+    fn save_window_placement(&mut self) {
+        if self.window.is_some() && self.keeps_placement() {
+            self.remember_window_placement();
+            if let Some(placement) = self.placement {
+                self.engine.store.set_window_placement(placement);
+            }
+        }
+    }
+
     /// Makes the window, draws its first frame hidden, shows it. Everything a window costs
     /// (surface, bitmap, fonts) is made here and given back by [`App::destroy_window`]. A failure
     /// is `Input::OpenFailed`: with no tray that ends the process.
     fn create_window(&mut self, event_loop: &ActiveEventLoop) {
         let opened = Instant::now();
-        let (w, h) = self.args.size.unwrap_or(DEFAULT_SIZE);
+        let saved = if self.keeps_placement() {
+            self.placement
+                .or_else(|| self.engine.store.window_placement())
+        } else {
+            None
+        };
+        let initial = placement::for_open(event_loop, self.args.size, saved);
+        let size = LogicalSize::new(initial.size.0, initial.size.1);
         let mut attributes = Window::default_attributes()
             .with_title("Hub")
             .with_decorations(false)
             .with_visible(false)
-            .with_inner_size(LogicalSize::new(
-                w.max(MIN_SIZE.0) as f64,
-                h.max(MIN_SIZE.1) as f64,
-            ))
-            .with_min_inner_size(LogicalSize::new(MIN_SIZE.0 as f64, MIN_SIZE.1 as f64))
+            .with_inner_size(size)
+            .with_min_inner_size(LogicalSize::new(MIN_SIZE.0, MIN_SIZE.1))
             .with_undecorated_shadow(true);
+        if let Some((x, y)) = initial.position {
+            attributes = attributes.with_position(PhysicalPosition::new(x, y));
+        }
         // A test run: shown without the focus and kept under every other window.
         if self.args.behind {
             attributes = attributes
@@ -1047,6 +1079,11 @@ impl App {
             }
         };
         self.trace.stage("window created");
+        // Winit applies the initial size before the position on Windows. Ask again only
+        // if moving to a monitor at another DPI left the client at the wrong size.
+        if window.inner_size() != size.to_physical::<u32>(window.scale_factor()) {
+            let _ = window.request_inner_size(size);
+        }
         self.scale = window.scale_factor() as f32;
         if let Some(h) = hwnd(&window) {
             mdshared_ui::platform::style_window(h, self.dark());
@@ -1062,6 +1099,11 @@ impl App {
             }
         }
         self.window = Some(window.clone());
+        self.remember_window_placement();
+        if initial.maximized {
+            window.set_maximized(true);
+            self.remember_window_placement();
+        }
         self.trace.stage("surface");
         // The first frame is drawn while the window is hidden, then the window is shown.
         self.draw();
@@ -1124,6 +1166,7 @@ impl App {
     /// Gives back everything the window cost: the window itself, its surface, the bitmap, the
     /// fonts and glyph caches. The engine stays: it is what the tray lives on.
     fn destroy_window(&mut self) {
+        self.save_window_placement();
         self.popup.clear();
         self.settings.clear();
         self.motion = WindowMotion::default();
@@ -1255,6 +1298,7 @@ impl App {
         }
         self.trace.memory("exit");
         self.trace.cpu("exit");
+        self.save_window_placement();
         // The icon goes before the process does, so no ghost is left in the notification area.
         self.tray = None;
         // Ending (not restarting): a downloaded Hub is swapped in now, so the next start is it.
@@ -1367,6 +1411,7 @@ pub fn run(mut args: Args, started: Instant) -> i32 {
         trace,
         engine,
         window: None,
+        placement: None,
         surface: None,
         bmp: Bitmap::new(1, 1),
         gfx: None,

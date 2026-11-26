@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Renders Hub's screenshot set with --shot into the directory given as the only argument: every
-# demo state (bins/hub/src/demo.rs) x list / large / small x light / dark x 1280x800 and 860x600.
+# demo state (bins/hub/src/demo.rs) x list / large / small x light / dark x 1280x800 and 860x660.
 # Run it twice into two directories and compare: every PNG must be byte-identical.
 #
 #   tests/shots.sh target/shots/a
@@ -24,7 +24,7 @@ exe="$t/release/hub.exe"
 DEMOS="main first-run updating failed done noinfo running banner all claude-switch empty settings-general settings-updates settings-about settings-interval-menu row-menu notes notes-offer notes-loading notes-failed notes-nofile notes-long notes-bar-active hover-close hover-min hover-bar hover-primary pressed-primary hover-open hover-menu close-question close-question-yes close-question-no backdrop-mica backdrop-acrylic"
 VIEWS="list large small"
 THEMES="light dark"
-SIZES="1280x800 860x600"
+SIZES="1280x800 860x660"
 
 mkdir -p "$out"
 export HUB_DATA="$out/.hub-data"

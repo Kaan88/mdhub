@@ -25,6 +25,8 @@ mod grid;
 mod icon;
 mod motion;
 mod panes;
+#[cfg(any(windows, test))]
+mod placement;
 mod popup;
 mod settings;
 mod shot;

@@ -6,7 +6,7 @@
 set -euo pipefail
 dir="${1:?usage: tests/shots-check.sh <output-dir>}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
-word() { sed -n "s/^$1=\"\(.*\)\"\$/\1/p" "$root/tests/shots.sh" | head -1; }
+word() { tr -d '\r' < "$root/tests/shots.sh" | sed -n "s/^$1=\"\(.*\)\"\$/\1/p" | head -1; }
 demos="$(word DEMOS)" views="$(word VIEWS)" themes="$(word THEMES)" sizes="$(word SIZES)"
 [ -n "$demos" ] && [ -n "$views" ] && [ -n "$themes" ] && [ -n "$sizes" ] || { echo "shots-check: cannot read the lists of shots.sh" >&2; exit 1; }
 png() { [ "$(head -c 8 "$1" | od -An -tx1 | tr -d ' \n')" = "89504e470d0a1a0a" ]; }
