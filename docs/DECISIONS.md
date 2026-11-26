@@ -347,3 +347,14 @@ and does not replace saved placement; demos and shots do not use it. The extra 6
 let the seven-app list show its details pane above the status bar; no padding change was needed.
 Would change: evidence that a visible title bar is not enough to recover the window after a
 display change, or a catalog large enough to need a different default layout.
+
+## D-039 Small tiles have an overflow menu; the notes thumb clears the resize band
+Keep the compact tile's size and text. Put an always-visible 28 px overflow target at the top
+left, away from the badge at the icon's top right. Left-align the shared popup at that target;
+list and large-grid menus stay right-aligned. Lead with available row actions, then the
+existing secondary entries (Open once). A picked row action is checked again and takes the
+ordinary command path; opening a menu is never consent to close an app. Would change: evidence
+that the target is hard to find or use at the minimum window size.
+
+The notes scrollbar is inset from the right resize band: the visible thumb takes a drag and
+the window edge still takes a resize. It uses the shared cursor state, not custom cursors.

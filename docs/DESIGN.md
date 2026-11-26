@@ -110,9 +110,12 @@ programs the test builds and a `SetupRunner`, never a real installer.
 `Vm` is everything the window shows (apps with their `Row`, versions, date, size, notes, details;
 selection; view; offer bar; status text; a busy text); `draw(painter, palette, w, h, vm) ->
 Layout` paints the title row, command bar, the list or the grid (large tiles carry versions,
-status and one action; small tiles an icon, a name and one word), the pane under it ("What's
-new" and the details of the release) and the status bar, and returns every hit rect. Drawn with
-`mdshared-ui` (frameless title, buttons, theme `LIGHT`/`DARK`). Every number is a constant.
+status and one action; small tiles an icon, a name, a status and an overflow menu), the pane
+under it ("What's new" and the details of the release) and the status bar, and returns every hit rect. Drawn with
+`mdshared-ui` (frameless title, buttons, theme `LIGHT`/`DARK`). Large tiles fit the arrow and
+both versions inside one padded line, shortening the versions before measuring and centering
+them. In both grids, failure and done badges use dark ink in dark mode and white ink in light
+mode; the small tile's "Not installed" status is readable even though its app icon is dim.
 
 `appicon.rs`: each catalog app's own icon (`assets/apps/<id>.png`, 128 px, `include_bytes!`).
 `ui::app_tile` calls `appicon::draw`, which decodes the PNG on the first draw that needs it
@@ -141,14 +144,19 @@ release-notes changes (including the fetched text arriving); command bars and th
 button stay live. While blending old pixels, Hub withholds hits in the mixed region. A new size,
 scale or region cancels the old snapshot. If an overlay covered the outgoing page, Hub redraws
 that base once so the overlay is not captured. `popup.rs` keeps the catalog context menu in a
-shared presence slot and uses shared menu rendering for placement, hover, entry and exit.
+shared presence slot and uses shared menu rendering for placement, hover, entry and exit. The
+small tile's 28 px top-left overflow button anchors the menu at its left edge (D-039); its row
+actions come first, then the existing secondary commands with no duplicate Open. The engine
+checks that a picked row action is still available and dispatches it through the same command
+as a row button, including the app-close consent check for Update.
 
 ## bins/hub: demo.rs, shot.rs
 `hub --shot out.png [--size WxH] [--scale N] [--light|--dark] [--view list|large|small] [--demo
 NAME]` renders a `Vm` with no window and no read of this PC. `demo.rs` builds the made-up Vms
 (`main, first-run, updating, failed, done, noinfo, running, banner, all, claude-switch, empty`, the notes and
-settings states, `row-menu`, and the pointer states `hover-close hover-min hover-bar hover-primary
-pressed-primary hover-open hover-menu close-question close-question-yes close-question-no`);
+settings states, `row-menu`, `small-install-menu` (Install on a small tile), `long-versions`
+(large tiles at the 520×360 minimum), and the pointer states `hover-close hover-min hover-bar
+hover-primary pressed-primary hover-open hover-menu close-question close-question-yes close-question-no`);
 `tests/shots.sh`
 renders all of them at their settled endpoints. A shot is limited to 64 million pixels. `backdrop-mica` and
 `backdrop-acrylic` are the main window with its chrome keyed out over a stand-in backdrop
@@ -163,6 +171,15 @@ for, both for tests. `app.rs`: winit and softbuffer, a frameless window, a loop 
 CPU at idle). `cli.rs`: `--behind --no-session --exit-after-ms --trace --demo --check-now --size
 --light/--dark --view`; `HUB_FIRST_CHECK_MS` sets the first check's delay (default 2 minutes).
 `trace.rs`: `--trace` prints stage times, memory and CPU time.
+
+Keyboard selection changes and view switches reveal the selected row or tile, using the
+painter's row heights, grid geometry and the body below the fixed header. This is not done
+on unrelated commands, so scrolling away from the selection does not snap back. A single
+pointer resolver supplies hover and the cursor on both move and redraw: active overlays
+block the base controls, then a captured notes drag or a resize edge takes priority over
+the painted hits. Leaving the window invalidates the last position. The filter and notes link
+request Text and Pointer; the notes thumb requests Grab or Grabbing, which winit currently
+maps to the same Windows system cursor.
 
 Window placement (D-037): `placement.rs` works from the current monitor work areas and DPI.
 `[window] placement` stores the normal outer origin in physical desktop pixels (including
@@ -205,10 +222,12 @@ toward it; `bar_drag` puts the thumb's top at pointer y less dy and turns that i
 offset with the shared `scroll::offset_for_thumb`, clamped, None on a closed page or a non-finite
 number. `app.rs` holds `ngrab` from the press to the release (or the window losing focus), and
 sets `NotesVm.bar_active` before each frame while the pointer is on the bar or drags it: the
-shared bar eases between narrow and wide (the hit track and drag maths stay fixed).
+shared bar eases between narrow and wide (the hit track and drag maths stay fixed). The bar
+is inset by the window's resize-band width so its visible thumb is not a resize target.
 The page: header (back arrow, "Release notes of X", the version), the scrolling body in a column
 at most 740 px wide with the shared overlay scrollbar, a footer with `mdedit 1.2.0 -> 1.2.1`, the
-date and "Release page".
+date and "View on GitHub". Markdown link labels are ordinary text with surrounding bold/soft
+styling, not clickable controls.
 `changelog.rs`: `parse` (headings `#`..`###`, bullet and numbered lists with nesting up to 3 and
 continuation lines, paragraphs, fenced code, rules, table rows as mono lines; the rest is text),
 `inline` (bold, italic, code, links as their text, escapes; an opener with no closer is text;
@@ -268,10 +287,11 @@ packs `assets/hub.ico` from this module's output (`-Sheet file.png` for a sheet 
 icon seen live (CLAUDE.md rule 6).
 
 ## settings.rs (bins/hub)
-The rows of the shared `mdshared_ui::settings::Form`: Start Hub with Windows, Show an icon in the
-tray, Tell me when updates are found, Look for updates (Every hour / 6 hours / day / week /
-Never), About line and "Update Hub" (becomes "Restart now" once ready). The engine applies and
-saves a change (`state.rs`); the tray menu changes the same settings and the form's rows are
+The rows of the shared `mdshared_ui::settings::Form`: Start with Windows, Keep Hub in the
+tray, Notify about updates, Check for updates automatically (Every hour / 6 hours / day / week /
+Manually only), About line and "Update Hub" (becomes "Restart now" once ready). The engine applies and
+saves a change (`state.rs`); labels do not affect the stored keys or values. The tray menu shares
+the Start and Notify labels, changes the same settings, and the form's rows are
 updated in place when they differ. Opened by the sliders button (`Hit::Settings`). Shots: `settings-general`,
 `settings-updates`, `settings-about` (the last over the banner state). One page (D-034): the
 shared form's `single_page()`, headings in the body and no category list; `page` only scrolls to a
