@@ -24,8 +24,6 @@ makes the settings card one page with no category list (D-034).
   unreleased; its per-user setup never closes the running app, to protect live embedded sessions.
 - `crates/hub-core/tests/samples.rs`: each released app's `tools/samples/<id>/hub.txt` parses and
   round-trips; `NO_SAMPLE` names Barbican and Claude Switch until they gain real release samples.
-- D-035: Windows release checks passed (381 tests, four existing ignores). Full-catalog first-frame
-  median was 201.5 ms before and 203.9 ms after, both over budget; after: 9.4–9.6 MiB, idle CPU 0 ms/2 s.
 - `bins/hub`: the window (`app`, winit + softbuffer, created on demand), its engine (`glue`),
   workers (`work`), `cli`, drawing (`vm view grid panes ui`), `--shot` and `demo`, and the tray
   work: `tray` (icon, system menu, balloon, on a thread of its own), `icon` (the icon and badge
@@ -33,6 +31,9 @@ makes the settings card one page with no category list (D-034).
 - Tray: closing the window keeps Hub in the tray, "Quit Hub" / `hub --quit` ends it; `--tray`
   starts with no window, first check 2 minutes later; badge; one balloon per check that found
   something (D-021); re-added on `TaskbarCreated`. Start with Windows: Run key, off (D-020).
+- Window (D-036): 860×660 logical by default, enough for seven list rows, the details pane and the
+  footer. Close-to-tray and quit save position, logical client size and maximized state in
+  `settings.ini`; restore uses the current monitor work areas. `--size` and shots are independent.
 - Self-update (D-022): checked first, staged, swapped last, restart; works only for an installed
   copy, where it ran once (0.1.0 to 0.1.1, by the owner).
 - The installer (`packaging/windows/hub.iss`, Inno, per user) and the workflows `ci` and `release`:
@@ -60,13 +61,16 @@ makes the settings card one page with no category list (D-034).
   `notes.file` is one GET (64 KiB, 10 s) only when the view is opened, kept on disk by app and
   version; loading, loaded, failed (reason, Try again) and no file are drawn. The scrollbar's thumb
   drags, a track click pages toward it, the bar widens under the pointer (`notes-bar-active`).
-- Verified 2026-11-24, the three merged for 0.1.4: `cargo fmt --all --check` clean; clippy
-  `-D warnings` clean, workspace and `-p hub --features test-hooks`; `cargo test --release
-  --workspace` 174 (hub, 1 ignored) + 202 (hub-core, 1 ignored) + 2 (samples) passed;
-  `tests/shots.sh` 324 PNGs twice, byte-identical, `shots-check` 0 bad; the backdrop and hover
-  shots looked at in both themes; each branch verified alone before.
-- Budgets measured (release, `--behind`, fresh `HUB_DATA`, 11 runs unless noted):
-  | | now | budget | before the tray work |
+- Windows release checks for D-036: fmt, both clippy runs, 389 tests passed with four existing
+  ignores; all eight new tests caught deliberate regressions. The two sets of 336 shots were
+  byte-identical and passed `shots-check`; list, grids and settings were reviewed in both themes.
+  Scratch Windows runs verified tray reopen, restart, maximize, off-screen fallback and CLI
+  override. Physical monitor changes and mixed DPI were not tested on hardware.
+- D-036 `--trace`, seven paired runs per path: first-frame median 185.3 → 190.9 ms (demo) and
+  215.5 → 223.3 ms (normal startup with a saved rectangle), both already over the 100 ms budget.
+  Private memory 9.4–9.6 → 9.8–10.1 MiB; after: 0 ms CPU in every 2 s idle sample.
+- Historical tray measurements (release, `--behind`, fresh `HUB_DATA`, 11 runs unless noted):
+  | | after the tray work | budget | before the tray work |
   |---|---|---|---|
   | first frame, window path (`--demo main`) | median 62.3 ms, 53.3 to 87.3 | < 100 ms | 67.7 ms |
   | private memory, window open | 9.2 MiB, 9.1 to 9.3 | < 30 MiB | 9.2 MiB |
@@ -75,16 +79,12 @@ makes the settings card one page with no category list (D-034).
   | window open during the cycles | 9.4 to 10.2 MiB | < 30 MiB | none |
   | idle CPU over 10 s, tray only / window open | 0 ms / 0 ms | none | 0 |
   | exe size | 3,441,664 bytes (after the icon and the fixes) | none | 3.18 MB |
-  A 64 KiB notes file lays out in 31 ms once, a scroll frame in 0.16 ms. 0.1.4 against `b432ad4`
-  (0.1.3), 14 runs each, interleaved: first frame median 70.8 ms against 61.8 (58.6 to 93.4 against
-  55.9 to 96.0), the PC's load: 5 more pairs' stage times match (first frame drawn 52.0 to 62.6
-  against 51.8 to 54.3). Private 9.4 to 9.5 MiB in both; exe 3,674,624 bytes against 3,651,584. The
-  frosted path is not timed (a `--behind` window has no focus). Unmeasured: tray-only memory
-  since the tray work, a real window-first start, a real network fetch.
+  A 64 KiB notes file lays out in 31 ms once, a scroll frame in 0.16 ms. Still unmeasured: the
+  focused frosted path, an installed-copy start, and a real network fetch.
 
 ## What does not exist
 
-- **Seen live: nothing new.** The Purge and Barbican rows were looked at in a shot, not in a run
+- The Purge and Barbican rows were looked at in a shot, not in a run
   against real data. The tray icon with its badge, the balloon, the tray menu, an Explorer restart
   and a click in the settings card were not seen or used by a person. Hover and press were seen in
   shots only: the pointer wiring in `app.rs` is compiled, not driven by a mouse, and has no test.

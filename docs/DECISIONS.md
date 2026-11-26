@@ -318,3 +318,18 @@ fallback). The app asks before quitting with live tabs. If it hides to the tray,
 The 128 px app icon is from `assets/logo-256.png`; the fallback is Claude clay and `code`.
 Hub's own icon is unchanged (D-024). No release or sample yet; no legacy manifest or self-updater.
 Would change: an installer path or AppId change, or an app-provided safe quit request.
+
+## D-036 Hub remembers its normal window rectangle, and the default is 860×660
+Refines D-017 (Hub's own files) and D-018 (destroy the window when closing to the tray).
+`settings.ini` holds `[window]` `placement=x y width height maximized`, with a signed physical
+desktop origin, logical client width and height, and `0`/`1` for maximized. A different DPI can
+then change how many device pixels the client takes without changing its logical size. Moves and
+resizes update memory; close-to-tray and normal exit save under the existing store lock. A minimized
+window saves its last visible state, not an iconic rectangle. Nothing polls.
+Restore needs a reachable part of the draggable title bar in a current monitor's work area; if
+none fits, use the unmaximized default centered on the primary work area. A restored size is
+bounded by the destination work area and the existing 520×360 logical minimum. `--size` ignores
+and does not replace saved placement; demos and shots do not use it. The extra 60 logical pixels
+let the seven-app list show its details pane above the status bar; no padding change was needed.
+Would change: evidence that a visible title bar is not enough to recover the window after a
+display change, or a catalog large enough to need a different default layout.

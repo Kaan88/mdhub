@@ -56,11 +56,11 @@ m`; the tests and the samples use it).
 ## state.rs
 `Store {dir}`, `Store::open()` (`$HUB_DATA`, else `%LOCALAPPDATA%\Hub`; created on demand),
 `Store::at(dir)` for tests. `installed.ini` (a section per app: folder, exe, version, kind, date),
-`settings.ini` (`view`, `interval_hours` default 6, `backdrop` default off, `[skipped]`), `checks.ini` (last attempt,
-failure count), `latest\<id>.txt` (the cached manifest text, so the window has rows with no
-network), `cache\<id>-<version>` and a `rollback_dir`. Every read-modify-write holds
-`.hub.lock`, a stale lock is broken, temp files are named per process and write, and writes
-rename. A file over its limit or damaged reads as empty; nothing panics.
+`settings.ini` (`view`, `interval_hours` default 6, `backdrop` default off, `[skipped]`, `[window]`
+placement), `checks.ini` (last attempt, failure count), `latest\<id>.txt` (cached manifest text, so
+the window has rows with no network), `cache\<id>-<version>` and a `rollback_dir`. Every
+read-modify-write holds `.hub.lock`, a stale lock is broken, temp files are named per process
+and write, and writes rename. A file over its limit or damaged reads as empty; nothing panics.
 
 ## detect.rs
 The plan's 3.2 order: Hub's record (while its exe still exists), then the uninstall entries
@@ -158,6 +158,18 @@ for, both for tests. `app.rs`: winit and softbuffer, a frameless window, a loop 
 CPU at idle). `cli.rs`: `--behind --no-session --exit-after-ms --trace --demo --check-now --size
 --light/--dark --view`; `HUB_FIRST_CHECK_MS` sets the first check's delay (default 2 minutes).
 `trace.rs`: `--trace` prints stage times, memory and CPU time.
+
+Window placement (D-036): `placement.rs` works from the current monitor work areas and DPI.
+`[window] placement` stores the normal outer origin in physical desktop pixels (including
+negative coordinates), logical client dimensions, and whether the last non-minimized state was
+maximized. Move and resize update the in-memory snapshot, not the disk. Teardown (close to tray,
+quit or restart) takes one last snapshot and saves if changed. Reopening from the tray uses that
+snapshot even if writing failed; the first open reads `settings.ini`. The normal rectangle is
+placed while hidden and the logical size is checked at the window's actual DPI before maximizing.
+If the draggable title bar is not reachable on any monitor, the default is centered in the
+primary work area; the client minimum is 520×360. `--size` opens centered and unmaximized without
+reading or writing placement; `--demo` and `--shot` also never touch the saved placement.
+
 Closing an app: an install of an open app waits for the offer bar's yes, which covers that one
 install only (D-025); a roll back of an open app is not started (D-026); when the bar asks and
 there is no window, `app.rs` makes one (`tray::wants_window`), and closing it answers "Not now".
