@@ -3,16 +3,19 @@
 //! `Vm` and returns the `Layout` of everything a pointer can hit. Every number is a constant.
 use crate::changelog;
 use crate::grid;
+use crate::motion::{self, ButtonLook};
 use crate::panes;
 use crate::ui::{self, amber, blue, green, red};
-use crate::vm::{Act, AppVm, Hit, Layout, Look, Pointer, View, Vm};
+use crate::vm::{Act, AppVm, Hit, Layout, Pointer, View, Vm};
 use hub_core::model::Row;
+use mdshared_ui::anim::Animator;
 use mdshared_ui::chrome::{
-    BAR_H, TITLE_H, WIN_BTN_W, WinButton, button_fill, draw_win_button, win_button_rect,
+    BAR_H, TITLE_H, WIN_BTN_W, WinButton, button_fill_animated, draw_win_button_animated,
+    win_button_rect,
 };
 use mdshared_ui::gfx::{Face, Painter, Rect, Rgb, mix};
 use mdshared_ui::glyph;
-use mdshared_ui::notice::{OfferBarState, draw_offer_bar};
+use mdshared_ui::notice::{OfferBarHits, OfferBarState, draw_offer_bar};
 use mdshared_ui::theme::Palette;
 
 pub const STATUS_H: f32 = 26.0;
@@ -183,6 +186,26 @@ pub fn draw_full(
     scroll: f32,
     notes_scroll: f32,
 ) -> Layout {
+    draw_motion(
+        p,
+        pal,
+        w,
+        h,
+        vm,
+        [scroll, notes_scroll],
+        &mut motion::still(),
+    )
+}
+
+pub fn draw_motion(
+    p: &mut Painter,
+    pal: &Palette,
+    w: f32,
+    h: f32,
+    vm: &Vm,
+    [scroll, notes_scroll]: [f32; 2],
+    anim: &mut Animator,
+) -> Layout {
     let (w, h) = (
         if w.is_finite() { w.max(0.0) } else { 0.0 },
         if h.is_finite() { h.max(0.0) } else { 0.0 },
@@ -196,24 +219,20 @@ pub fn draw_full(
     } else {
         0.0
     };
-    title(p, pal, w, &vm.pointer, &mut lay);
+    title(p, pal, w, &vm.pointer, &mut lay, anim);
     lay.chrome.push(Rect::new(0.0, 0.0, w, TITLE_H));
     if vm.notes.is_none() {
-        command_bar(p, pal, w, vm, &mut lay);
+        command_bar(p, pal, w, vm, &mut lay, anim);
         lay.chrome.push(Rect::new(0.0, TITLE_H, w, BAR_H));
     }
     if let Some(b) = &vm.banner {
-        let r = Rect::new(0.0, TITLE_H + BAR_H, w, BANNER_H);
-        let hits = draw_offer_bar(
-            p,
-            pal,
-            r,
-            if b.warn { glyph::WARN } else { glyph::DOWNLOAD },
-            &ui::cap(&b.text, 300),
-            &ui::cap(&b.yes, 40),
-            &ui::cap(&b.no, 40),
-            offer_state(&vm.pointer),
-        );
+        let top = if vm.notes.is_some() {
+            TITLE_H
+        } else {
+            TITLE_H + BAR_H
+        };
+        let r = Rect::new(0.0, top, w, BANNER_H);
+        let hits = offer(p, pal, r, b, vm.pointer, anim);
         for (rect, hit) in [
             (hits.yes, Hit::BannerYes),
             (hits.no, Hit::BannerNo),
@@ -236,15 +255,16 @@ pub fn draw_full(
             notes_scroll,
             &vm.pointer,
             &mut lay,
+            anim,
         );
     } else {
         match vm.view {
             _ if vm.apps.is_empty() => empty(p, pal, geo.list),
-            View::List => list(p, pal, geo.list, vm, scroll, &mut lay),
-            _ => grid::draw(p, pal, geo.list, vm, scroll, &mut lay),
+            View::List => list(p, pal, geo.list, vm, scroll, &mut lay, anim),
+            _ => grid::draw(p, pal, geo.list, vm, scroll, &mut lay, anim),
         }
         if geo.pane.h > 0.0 {
-            panes::draw(p, pal, geo.pane, vm, &mut lay);
+            panes::draw(p, pal, geo.pane, vm, &mut lay, anim);
         }
     }
     let status = Rect::new(0.0, geo.status_y, w, STATUS_H.min(h));
@@ -268,7 +288,14 @@ fn empty(p: &mut Painter, pal: &Palette, r: Rect) {
 
 // ---- the title row ----------------------------------------------------------------------------
 
-fn title(p: &mut Painter, pal: &Palette, w: f32, ptr: &Pointer, lay: &mut Layout) {
+fn title(
+    p: &mut Painter,
+    pal: &Palette,
+    w: f32,
+    ptr: &Pointer,
+    lay: &mut Layout,
+    anim: &mut Animator,
+) {
     p.fill(Rect::new(0.0, 0.0, w, TITLE_H), pal.title);
     let right = (w - 3.0 * WIN_BTN_W).max(0.0);
     let drag = Rect::new(0.0, 0.0, right, TITLE_H);
@@ -303,7 +330,17 @@ fn title(p: &mut Painter, pal: &Palette, w: f32, ptr: &Pointer, lay: &mut Layout
     {
         let b = win_button_rect(w, n);
         let look = ptr.look(hit);
-        draw_win_button(p, pal, kind, b, false, look.hovered, look.pressed);
+        draw_win_button_animated(
+            p,
+            pal,
+            anim,
+            hit,
+            kind,
+            b,
+            false,
+            look.hovered,
+            look.pressed,
+        );
         lay.hits.push((b, hit));
     }
 }
@@ -319,7 +356,7 @@ fn bar_button(
     g: &str,
     label: &str,
     enabled: bool,
-    look: Look,
+    look: ButtonLook,
 ) -> Rect {
     let cy = y + 16.0;
     let w = 44.0 + p.measure(Face::Ui, 13.0, label);
@@ -340,7 +377,7 @@ fn primary_button(
     y: f32,
     g: &str,
     label: &str,
-    look: Look,
+    look: ButtonLook,
 ) -> Rect {
     let cy = y + 16.0;
     let wd = 44.0 + p.measure(Face::Semibold, 13.0, label);
@@ -359,7 +396,14 @@ fn primary_button(
     b
 }
 
-fn command_bar(p: &mut Painter, pal: &Palette, w: f32, vm: &Vm, lay: &mut Layout) {
+fn command_bar(
+    p: &mut Painter,
+    pal: &Palette,
+    w: f32,
+    vm: &Vm,
+    lay: &mut Layout,
+    anim: &mut Animator,
+) {
     let r = Rect::new(0.0, TITLE_H, w, BAR_H);
     p.fill(r, pal.bar);
     let y = r.y + (BAR_H - 32.0) / 2.0;
@@ -367,7 +411,13 @@ fn command_bar(p: &mut Painter, pal: &Palette, w: f32, vm: &Vm, lay: &mut Layout
     // The right group first, so the left one knows how much room it has.
     // The sliders button (settings) is the last thing on the right.
     let gear = Rect::new(w - 8.0 - 32.0, y, 32.0, 32.0);
-    ui::quiet_fill(p, pal, gear, 6.0, vm.pointer.look(Hit::Settings));
+    ui::quiet_fill(
+        p,
+        pal,
+        gear,
+        6.0,
+        motion::button(anim, Hit::Settings, vm.pointer, Hit::Settings),
+    );
     p.icon(glyph::SLIDERS, 15.0, gear.cx(), cy, pal.text);
     lay.hits.push((gear, Hit::Settings));
     let seg = 30.0;
@@ -384,11 +434,20 @@ fn command_bar(p: &mut Painter, pal: &Palette, w: f32, vm: &Vm, lay: &mut Layout
         let b = Rect::new(sr.x + 1.0 + k as f32 * seg, y + 1.0, seg, 30.0);
         let on = vm.view == v;
         let look = vm.pointer.look(Hit::ViewSwitch(v));
-        if let Some(fill) = button_fill(pal, look.hovered, look.pressed, on, false) {
-            p.rbox(
+        if let Some((fill, alpha)) = button_fill_animated(
+            anim,
+            Hit::ViewSwitch(v),
+            pal,
+            look.hovered,
+            look.pressed,
+            on,
+            false,
+        ) {
+            p.rbox_a(
                 Rect::new(b.x + 2.0, b.y + 2.0, b.w - 4.0, b.h - 4.0),
                 4.0,
                 fill,
+                alpha,
             );
         }
         p.icon(
@@ -448,7 +507,7 @@ fn command_bar(p: &mut Painter, pal: &Palette, w: f32, vm: &Vm, lay: &mut Layout
     };
     let mut x = 8.0;
     if let Some(t) = &vm.busy {
-        let look = vm.pointer.look(Hit::CancelAll);
+        let look = motion::button(anim, Hit::CancelAll, vm.pointer, Hit::CancelAll);
         let b = bar_button(p, pal, x, y, glyph::CLOSE, "Cancel all", true, look);
         lay.hits.push((b, Hit::CancelAll));
         x += b.w + 2.0;
@@ -471,7 +530,7 @@ fn command_bar(p: &mut Painter, pal: &Palette, w: f32, vm: &Vm, lay: &mut Layout
                 y,
                 glyph::DOWNLOAD,
                 &format!("Update all ({})", vm.updates),
-                vm.pointer.look(Hit::UpdateAll),
+                motion::button(anim, Hit::UpdateAll, vm.pointer, Hit::UpdateAll),
             );
             lay.hits.push((b, Hit::UpdateAll));
             x += b.w + 6.0;
@@ -490,7 +549,7 @@ fn command_bar(p: &mut Painter, pal: &Palette, w: f32, vm: &Vm, lay: &mut Layout
                 "Check now"
             },
             !checking,
-            vm.pointer.look(Hit::CheckNow),
+            motion::button(anim, Hit::CheckNow, vm.pointer, Hit::CheckNow),
         );
         if !checking {
             lay.hits.push((b, Hit::CheckNow));
@@ -582,7 +641,15 @@ pub fn status_of(pal: &Palette, a: &AppVm, compact: bool) -> Status {
     }
 }
 
-fn list(p: &mut Painter, pal: &Palette, r: Rect, vm: &Vm, scroll: f32, lay: &mut Layout) {
+fn list(
+    p: &mut Painter,
+    pal: &Palette,
+    r: Rect,
+    vm: &Vm,
+    scroll: f32,
+    lay: &mut Layout,
+    anim: &mut Animator,
+) {
     p.fill(r, pal.page);
     let c = cols(r.w);
     let px = p.px().max(1.0);
@@ -615,6 +682,7 @@ fn list(p: &mut Painter, pal: &Palette, r: Rect, vm: &Vm, scroll: f32, lay: &mut
             [ins_x, lat_x, rel_x, size_x, stat_x],
             &c,
             name_w,
+            anim,
         );
         let cy = rr.cy();
         let mut hits = vec![(rr, Hit::Row(i))];
@@ -666,21 +734,35 @@ fn row(
     xs: [f32; 5],
     c: &Cols,
     name_w: f32,
+    anim: &mut Animator,
 ) {
     let [ins_x, lat_x, rel_x, size_x, stat_x] = xs;
     let px = p.px().max(1.0);
     let sel = vm.sel == i;
+    let key = motion::app_key(vm, i);
+    let ground = motion::row_ground(
+        anim,
+        vm.view,
+        key,
+        if sel {
+            pal.on
+        } else if vm.hover == Some(i) {
+            pal.hover
+        } else {
+            pal.page
+        },
+    );
+    if ground != pal.page {
+        p.fill(rr, ground);
+    }
     if sel {
-        p.fill(rr, pal.on);
         p.fill(Rect::new(rr.x, rr.y + 2.0, 3.0, rr.h - 4.0), pal.accent);
-    } else if vm.hover == Some(i) {
-        p.fill(rr, pal.hover);
     }
     if matches!(a.row, Row::Failed(_)) {
         p.fill_a(rr, red(pal), if pal.dark { 0.12 } else { 0.08 });
     }
     p.fill_a(Rect::new(rr.x, rr.bottom() - px, rr.w, px), pal.line, 0.55);
-    let bg = if sel { pal.on } else { pal.page };
+    let bg = if sel { ground } else { pal.page };
     let cy = rr.cy();
     // The app.
     let tile = Rect::new(rr.x + 14.0, cy - 16.0, 32.0, 32.0);
@@ -780,13 +862,15 @@ fn row(
         );
     }
     // Status.
+    let opacity = motion::status(anim, key, &a.row);
+    let amount = motion::progress(anim, key, &a.row);
     let s = status_of(pal, a, c.released == 0.0);
     let sx = stat_x + 10.0;
     let lead = if s.dot.is_some() { 15.0 } else { 0.0 };
     let two = !s.sub.is_empty() || s.bar.is_some();
     let ly = if two { cy - 9.0 } else { cy };
     if let Some(d) = s.dot {
-        ui::dot(p, sx, ly, d);
+        ui::dot(p, sx, ly, mix(ground, d, opacity));
     }
     let room = (c.status - 20.0 - lead).max(0.0);
     p.text(
@@ -795,15 +879,15 @@ fn row(
         sx + lead,
         ly,
         &ui::cap(&s.line, 200),
-        s.line_col,
+        mix(ground, s.line_col, opacity),
         room,
     );
-    if let Some((f, col)) = s.bar {
+    if let Some((_, col)) = s.bar {
         ui::progress(
             p,
             pal,
             Rect::new(sx, cy + 8.0, (c.status - 28.0).max(0.0), 6.0),
-            f,
+            amount,
             col,
             bg,
         );
@@ -814,30 +898,28 @@ fn row(
             sx + lead,
             cy + 9.0,
             &ui::cap(&s.sub, 200),
-            s.sub_col,
+            mix(ground, s.sub_col, opacity),
             room,
         );
     }
     // Actions, from the right.
     let mut ax = rr.right() - 12.0;
-    let ground = if sel {
-        pal.on
-    } else if vm.hover == Some(i) {
-        pal.hover
-    } else {
-        pal.page
-    };
     ui::icon_fill(
         p,
         pal,
         Rect::new(ax - 24.0, cy - 14.0, 28.0, 28.0),
         ground,
-        vm.pointer.look(Hit::Menu(i)),
+        motion::button(anim, (vm.view, key, "menu"), vm.pointer, Hit::Menu(i)),
     );
     p.icon(glyph::MORE, 15.0, ax - 10.0, cy, pal.muted);
     ax -= 32.0;
     for b in row_actions(a) {
-        let look = vm.pointer.look(Hit::Action(i, b.act));
+        let look = motion::button(
+            anim,
+            (vm.view, key, b.act),
+            vm.pointer,
+            Hit::Action(i, b.act),
+        );
         let r = ui::sbtn_r(p, pal, ax, cy, b.label, b.primary, look);
         ax = r.x - 6.0;
     }
@@ -876,13 +958,52 @@ fn status_bar(p: &mut Painter, pal: &Palette, r: Rect, w: f32, vm: &Vm) {
     p.restore(old);
 }
 
-/// The offer bar's buttons as the pointer has them.
-fn offer_state(ptr: &Pointer) -> OfferBarState {
-    OfferBarState {
-        yes_hovered: ptr.over(Hit::BannerYes),
-        yes_pressed: ptr.down(Hit::BannerYes),
-        no_hovered: ptr.over(Hit::BannerNo),
-        no_pressed: ptr.down(Hit::BannerNo),
-        close_hovered: ptr.over(Hit::BannerClose),
+/// Shared's offer bar takes boolean looks. Only during a fade, draw its lit buttons over their
+/// resting pixels, with the whole bar's geometry and hit testing still owned by shared.
+fn offer(
+    p: &mut Painter,
+    pal: &Palette,
+    r: Rect,
+    b: &crate::vm::Banner,
+    ptr: Pointer,
+    anim: &mut Animator,
+) -> OfferBarHits {
+    let [yes, no, close] = [Hit::BannerYes, Hit::BannerNo, Hit::BannerClose]
+        .map(|hit| motion::button(anim, (b.hub, hit), ptr, hit));
+    let yes_text = ui::cap(&b.yes, 40);
+    let no_text = ui::cap(&b.no, 40);
+    let body = ui::cap(&b.text, 300);
+    let draw = |p: &mut Painter, cutoff: f32| {
+        draw_offer_bar(
+            p,
+            pal,
+            r,
+            if b.warn { glyph::WARN } else { glyph::DOWNLOAD },
+            &body,
+            &yes_text,
+            &no_text,
+            OfferBarState {
+                yes_hovered: yes.pressed || yes.hover > cutoff,
+                yes_pressed: yes.pressed,
+                no_hovered: no.pressed || no.hover > cutoff,
+                no_pressed: no.pressed,
+                close_hovered: close.hover > cutoff,
+            },
+        )
+    };
+    let hits = draw(p, 0.999_999);
+    for (rect, look) in [(hits.yes, yes), (hits.no, no), (hits.close, close)] {
+        if let Some(rect) = rect
+            && !look.pressed
+            && look.hover > 0.0
+            && look.hover < 1.0
+        {
+            let under = p.snapshot(rect);
+            let clip = p.clip(rect);
+            draw(p, 0.0);
+            p.fade(&under, look.hover);
+            p.restore(clip);
+        }
     }
+    hits
 }

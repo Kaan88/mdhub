@@ -45,7 +45,7 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: |
-          cargo build --release -p hub
+          cargo build --release -p hub --features test-hooks
           bash tests/shots.sh target/shots
           bash tests/shots-check.sh target/shots
       - uses: actions/upload-artifact@v7

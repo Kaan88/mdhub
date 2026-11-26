@@ -1,10 +1,12 @@
 //! The icon views: the same apps, states and actions as the list, as a grid of tiles. Large tiles
 //! carry the versions, the status and the one action of the row; small tiles carry the icon, the
 //! name and one word, and leave the rest to the pane under the grid and the row menu.
+use crate::motion;
 use crate::ui::{self, amber, blue, green, red};
 use crate::view::{HEAD_H, newer, row_actions, status_of};
 use crate::vm::{AppVm, Hit, Layout, View, Vm};
 use hub_core::model::Row;
+use mdshared_ui::anim::Animator;
 use mdshared_ui::gfx::{Face, Painter, Rect, Rgb, mix};
 use mdshared_ui::glyph;
 use mdshared_ui::theme::Palette;
@@ -56,7 +58,7 @@ fn word(pal: &Palette, a: &AppVm) -> (String, Rgb) {
 
 /// The badges on a tile: an update (an arrow), a failure (red, !), done (green check), and
 /// running (a green dot at the foot of the icon). `bg` is the colour behind the tile, for the ring.
-fn badges(p: &mut Painter, pal: &Palette, t: Rect, a: &AppVm, bg: Rgb) {
+fn badges(p: &mut Painter, pal: &Palette, t: Rect, a: &AppVm, bg: Rgb, opacity: f32) {
     let d = (t.w * 0.36).clamp(14.0, 20.0);
     let ring = |p: &mut Painter, cx: f32, cy: f32, d: f32, c: Rgb| {
         let o = Rect::new(cx - d / 2.0 - 2.0, cy - d / 2.0 - 2.0, d + 4.0, d + 4.0);
@@ -64,28 +66,37 @@ fn badges(p: &mut Painter, pal: &Palette, t: Rect, a: &AppVm, bg: Rgb) {
         p.rbox(Rect::new(cx - d / 2.0, cy - d / 2.0, d, d), d / 2.0, c);
     };
     let (cx, cy) = (t.right() - 2.0, t.y + 2.0);
-    if newer(&a.row) && !matches!(a.row, Row::Failed(_)) {
-        ring(p, cx, cy, d, pal.accent);
-        p.icon(glyph::DOWNLOAD, d * 0.62, cx, cy, pal.on_accent);
-    } else if matches!(a.row, Row::Failed(_)) {
-        ring(p, cx, cy, d, red(pal));
-        p.text_center(
-            Face::Semibold,
-            d * 0.7,
-            Rect::new(cx - d / 2.0, cy - d / 2.0, d, d),
-            "!",
-            [255, 255, 255],
-        );
-    } else if matches!(a.row, Row::Done(_)) {
-        ring(p, cx, cy, d, green(pal));
-        p.icon(glyph::CHECK, d * 0.62, cx, cy, [255, 255, 255]);
+    if newer(&a.row) || matches!(a.row, Row::Done(_)) {
+        let badge = Rect::new(cx - d / 2.0, cy - d / 2.0, d, d);
+        let under = (opacity < 1.0).then(|| p.snapshot(badge.inset(-3.0)));
+        if matches!(a.row, Row::Failed(_)) {
+            ring(p, cx, cy, d, red(pal));
+            p.text_center(Face::Semibold, d * 0.7, badge, "!", [255, 255, 255]);
+        } else if matches!(a.row, Row::Done(_)) {
+            ring(p, cx, cy, d, green(pal));
+            p.icon(glyph::CHECK, d * 0.62, cx, cy, [255, 255, 255]);
+        } else {
+            ring(p, cx, cy, d, pal.accent);
+            p.icon(glyph::DOWNLOAD, d * 0.62, cx, cy, pal.on_accent);
+        }
+        if let Some(under) = under {
+            p.fade(&under, opacity);
+        }
     }
     if a.running {
         ring(p, t.right() - 2.0, t.bottom() - 2.0, d * 0.6, green(pal));
     }
 }
 
-pub fn draw(p: &mut Painter, pal: &Palette, r: Rect, vm: &Vm, scroll: f32, lay: &mut Layout) {
+pub fn draw(
+    p: &mut Painter,
+    pal: &Palette,
+    r: Rect,
+    vm: &Vm,
+    scroll: f32,
+    lay: &mut Layout,
+    anim: &mut Animator,
+) {
     p.fill(r, pal.page);
     let px = p.px().max(1.0);
     let body = Rect::new(r.x, r.y + HEAD_H, r.w, (r.h - HEAD_H).max(0.0));
@@ -106,8 +117,8 @@ pub fn draw(p: &mut Painter, pal: &Palette, r: Rect, vm: &Vm, scroll: f32, lay: 
             break;
         }
         let hits = match vm.view {
-            View::Small => small(p, pal, c, vm, k, a),
-            _ => large(p, pal, c, vm, k, a),
+            View::Small => small(p, pal, c, vm, k, a, anim),
+            _ => large(p, pal, c, vm, k, a, anim),
         };
         for (rect, hit) in std::iter::once((c, Hit::Row(k))).chain(hits) {
             if let Some(v) = ui::intersect(rect, body) {
@@ -151,11 +162,11 @@ fn ground(
     c: Rect,
     vm: &Vm,
     i: usize,
-    a: &AppVm,
+    anim: &mut Animator,
     framed: bool,
 ) -> Rgb {
     let sel = vm.sel == i;
-    let failed = matches!(a.row, Row::Failed(_));
+    let failed = matches!(vm.apps[i].row, Row::Failed(_));
     let base = if sel {
         pal.on
     } else if vm.hover == Some(i) {
@@ -165,11 +176,12 @@ fn ground(
     } else {
         pal.page
     };
-    let bg = if failed {
+    let target = if failed {
         mix(base, red(pal), if pal.dark { 0.12 } else { 0.08 })
     } else {
         base
     };
+    let bg = motion::row_ground(anim, vm.view, motion::app_key(vm, i), target);
     if sel {
         p.frame(c, 8.0, bg, pal.accent);
     } else if framed {
@@ -187,17 +199,27 @@ fn large(
     vm: &Vm,
     i: usize,
     a: &AppVm,
+    anim: &mut Animator,
 ) -> Vec<(Rect, Hit)> {
     let mut hits = Vec::new();
-    let bg = ground(p, pal, c, vm, i, a, true);
+    let key = motion::app_key(vm, i);
+    let bg = ground(p, pal, c, vm, i, anim, true);
+    let opacity = motion::status(anim, key, &a.row);
+    let amount = motion::progress(anim, key, &a.row);
     let not_in = matches!(a.row, Row::NotInstalled);
     let cx = c.cx();
     // The icon.
     let t = Rect::new(cx - 28.0, c.y + 16.0, 56.0, 56.0);
     ui::app_tile(p, t, a.id, a.glyph, a.tile, not_in);
-    badges(p, pal, t, a, bg);
+    badges(p, pal, t, a, bg, opacity);
     let menu = Rect::new(c.right() - 30.0, c.y + 4.0, 26.0, 26.0);
-    ui::icon_fill(p, pal, menu, bg, vm.pointer.look(Hit::Menu(i)));
+    ui::icon_fill(
+        p,
+        pal,
+        menu,
+        bg,
+        motion::button(anim, (vm.view, key, "menu"), vm.pointer, Hit::Menu(i)),
+    );
     p.icon(glyph::MORE, 15.0, c.right() - 16.0, c.y + 16.0, pal.muted);
     hits.push((menu, Hit::Menu(i)));
     // Name and blurb.
@@ -221,12 +243,12 @@ fn large(
     let vy = c.y + 126.0;
     let bar_w = (c.w - 44.0).max(0.0);
     match &a.row {
-        Row::Downloading(f, _) => {
+        Row::Downloading(..) => {
             ui::progress(
                 p,
                 pal,
                 Rect::new(c.x + 22.0, vy - 3.0, bar_w, 6.0),
-                *f,
+                amount,
                 pal.accent,
                 bg,
             );
@@ -236,7 +258,7 @@ fn large(
                 p,
                 pal,
                 Rect::new(c.x + 22.0, vy - 3.0, bar_w, 6.0),
-                1.0,
+                amount,
                 mix(pal.accent, pal.page, 0.45),
                 bg,
             );
@@ -286,7 +308,7 @@ fn large(
     let w = p.measure(Face::Ui, 12.0, &text).min((tw - lead).max(0.0));
     let x0 = cx - (w + lead) / 2.0;
     if let Some(d) = s.dot {
-        ui::dot(p, x0, sy, d);
+        ui::dot(p, x0, sy, mix(bg, d, opacity));
     }
     p.text(
         Face::Ui,
@@ -294,7 +316,7 @@ fn large(
         x0 + lead,
         sy,
         &text,
-        col,
+        mix(bg, col, opacity),
         (tw - lead).max(0.0),
     );
     // The action.
@@ -307,7 +329,12 @@ fn large(
             c.y + 174.0,
             b.label,
             b.primary,
-            vm.pointer.look(Hit::Action(i, b.act)),
+            motion::button(
+                anim,
+                (vm.view, key, b.act),
+                vm.pointer,
+                Hit::Action(i, b.act),
+            ),
         );
         hits.push((r, Hit::Action(i, b.act)));
     }
@@ -321,13 +348,16 @@ fn small(
     vm: &Vm,
     i: usize,
     a: &AppVm,
+    anim: &mut Animator,
 ) -> Vec<(Rect, Hit)> {
-    let bg = ground(p, pal, c, vm, i, a, false);
+    let key = motion::app_key(vm, i);
+    let bg = ground(p, pal, c, vm, i, anim, false);
+    let opacity = motion::status(anim, key, &a.row);
     let dim = matches!(a.row, Row::NotInstalled);
     let cx = c.cx();
     let t = Rect::new(cx - 22.0, c.y + 12.0, 44.0, 44.0);
     ui::app_tile(p, t, a.id, a.glyph, a.tile, dim);
-    badges(p, pal, t, a, bg);
+    badges(p, pal, t, a, bg, opacity);
     let tw = (c.w - 12.0).max(0.0);
     let line = |y: f32| Rect::new(c.x + 6.0, y - 9.0, tw, 18.0);
     p.text_center(
@@ -338,11 +368,11 @@ fn small(
         pal.text,
     );
     match &a.row {
-        Row::Downloading(f, _) => ui::progress(
+        Row::Downloading(..) => ui::progress(
             p,
             pal,
             Rect::new(c.x + 18.0, c.y + 84.0, (c.w - 36.0).max(0.0), 5.0),
-            *f,
+            motion::progress(anim, key, &a.row),
             pal.accent,
             bg,
         ),
@@ -353,7 +383,13 @@ fn small(
             } else {
                 Face::Ui
             };
-            p.text_center(face, 11.5, line(c.y + 87.0), &ui::cap(&wd, 40), col);
+            p.text_center(
+                face,
+                11.5,
+                line(c.y + 87.0),
+                &ui::cap(&wd, 40),
+                mix(bg, col, opacity),
+            );
         }
     }
     Vec::new()

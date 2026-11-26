@@ -1,6 +1,6 @@
 //! Small drawing helpers the window shares: wrapped text, buttons, tiles, progress bars, dots,
 //! the status colours, and rectangle clipping for the hit list.
-use crate::vm::Look;
+use crate::motion::ButtonLook;
 use mdshared_ui::chrome::button_fill;
 use mdshared_ui::gfx::{Face, Painter, Rect, Rgb, mix};
 use mdshared_ui::glyph;
@@ -155,12 +155,9 @@ pub fn btn_w(p: &mut Painter, label: &str) -> f32 {
 
 /// The fill of an accent button: lighter (dark theme: darker) while hovered, more while pressed,
 /// as the shared offer bar's buttons do.
-pub fn accent_fill(pal: &Palette, look: Look) -> Rgb {
-    match (look.hovered, look.pressed) {
-        (true, true) => mix(pal.accent, pal.page, 0.2),
-        (true, false) => mix(pal.accent, pal.page, 0.1),
-        _ => pal.accent,
-    }
+pub fn accent_fill(pal: &Palette, look: ButtonLook) -> Rgb {
+    let lift = if look.pressed { 0.2 } else { 0.1 * look.hover };
+    mix(pal.accent, pal.page, lift)
 }
 
 /// A 28 px button at `x`, centred on `cy`, drawn as `look` says; returns its rectangle.
@@ -171,7 +168,7 @@ pub fn sbtn(
     cy: f32,
     label: &str,
     primary: bool,
-    look: Look,
+    look: ButtonLook,
 ) -> Rect {
     let w = btn_w(p, label);
     let r = Rect::new(x, cy - 14.0, w, 28.0);
@@ -181,16 +178,20 @@ pub fn sbtn(
     } else {
         // The row under a hovered button is lit too (`pal.hover`): the button takes a step past
         // that colour, and a stronger frame, so it still stands apart from the row.
-        let (fill, line) = match (look.hovered, look.pressed) {
-            (true, true) => (
+        let (fill, line) = if look.pressed {
+            (
                 mix(pal.press, pal.text, 0.12),
                 mix(pal.line, pal.text, 0.35),
-            ),
-            (true, false) => (
-                mix(pal.hover, pal.text, 0.09),
-                mix(pal.line, pal.text, 0.25),
-            ),
-            _ => (mix(pal.page, pal.text, 0.04), pal.line),
+            )
+        } else {
+            (
+                mix(
+                    mix(pal.page, pal.text, 0.04),
+                    mix(pal.hover, pal.text, 0.09),
+                    look.hover,
+                ),
+                mix(pal.line, mix(pal.line, pal.text, 0.25), look.hover),
+            )
         };
         p.frame(r, 5.0, fill, line);
         p.text_center(Face::Ui, 12.5, r, label, pal.text);
@@ -206,7 +207,7 @@ pub fn sbtn_r(
     cy: f32,
     label: &str,
     primary: bool,
-    look: Look,
+    look: ButtonLook,
 ) -> Rect {
     let w = btn_w(p, label);
     sbtn(p, pal, right - w, cy, label, primary, look)
@@ -214,19 +215,28 @@ pub fn sbtn_r(
 
 /// The fill behind an icon button that sits on `ground` (a row or a tile, itself lit while the
 /// pointer is over it): a step darker than that ground while hovered, two while pressed.
-pub fn icon_fill(p: &mut Painter, pal: &Palette, r: Rect, ground: Rgb, look: Look) {
-    let lift = match (look.hovered, look.pressed) {
-        (true, true) => 0.16,
-        (true, false) => 0.09,
-        _ => return,
-    };
-    p.rbox(r, 5.0, mix(ground, pal.text, lift));
+pub fn icon_fill(p: &mut Painter, pal: &Palette, r: Rect, ground: Rgb, look: ButtonLook) {
+    if look.pressed || look.hover > 0.0 {
+        let lift = if look.pressed { 0.16 } else { 0.09 };
+        p.rbox_a(
+            r,
+            5.0,
+            mix(ground, pal.text, lift),
+            if look.pressed { 1.0 } else { look.hover },
+        );
+    }
 }
 
 /// The fill behind a quiet icon or bar button (the shared rule: none at rest, hover, press).
-pub fn quiet_fill(p: &mut Painter, pal: &Palette, r: Rect, radius: f32, look: Look) {
-    if let Some(fill) = button_fill(pal, look.hovered, look.pressed, false, false) {
-        p.rbox(r, radius, fill);
+pub fn quiet_fill(p: &mut Painter, pal: &Palette, r: Rect, radius: f32, look: ButtonLook) {
+    if let Some(fill) = button_fill(
+        pal,
+        look.pressed || look.hover > 0.0,
+        look.pressed,
+        false,
+        false,
+    ) {
+        p.rbox_a(r, radius, fill, if look.pressed { 1.0 } else { look.hover });
     }
 }
 

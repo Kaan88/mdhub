@@ -4,7 +4,7 @@
 use hub_core::model::Row;
 use mdshared_ui::gfx::Rect;
 
-#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug, Hash)]
 pub enum View {
     #[default]
     List,
@@ -66,6 +66,9 @@ pub struct Vm {
     /// A picture of the settings card over the window (`--demo settings-...`): its rows and the
     /// category shown. The real window keeps a form of its own, so this is None there.
     pub settings: Option<(Vec<mdshared_ui::settings::Row>, usize)>,
+    /// Settled overlay specimens; never supplied by a live engine.
+    pub demo_menu: bool,
+    pub demo_dropdown: bool,
     /// The release notes view: when it is Some, it takes the content area (the list and the pane
     /// are not drawn) until it is closed.
     pub notes: Option<NotesVm>,
@@ -142,7 +145,7 @@ pub struct NotesVm {
 }
 
 /// What a row or tile's button does.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Act {
     Open,
     Install,
@@ -153,7 +156,7 @@ pub enum Act {
 }
 
 /// What a point on the window is.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
 pub enum Hit {
     /// Title row empty space: drag the window.
     Drag,
