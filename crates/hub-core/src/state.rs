@@ -59,6 +59,44 @@ pub struct Store {
     pub dir: PathBuf,
 }
 
+/// The normal window rectangle, even when the window was closed maximized. The origin is in
+/// desktop device pixels (which can be negative); the client size is in logical pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowPlacement {
+    pub position: (i32, i32),
+    pub size: (u32, u32),
+    pub maximized: bool,
+}
+
+impl WindowPlacement {
+    fn parse(value: &str) -> Option<Self> {
+        let mut fields = value.split_ascii_whitespace();
+        let position = (fields.next()?.parse().ok()?, fields.next()?.parse().ok()?);
+        let size = (
+            fields.next()?.parse::<u32>().ok()?,
+            fields.next()?.parse::<u32>().ok()?,
+        );
+        let maximized = match fields.next()? {
+            "0" => false,
+            "1" => true,
+            _ => return None,
+        };
+        if size.0 == 0 || size.1 == 0 || fields.next().is_some() {
+            return None;
+        }
+        Some(Self {
+            position,
+            size,
+            maximized,
+        })
+    }
+
+    fn encode(self) -> String {
+        let ((x, y), (w, h)) = (self.position, self.size);
+        format!("{x} {y} {w} {h} {}", u8::from(self.maximized))
+    }
+}
+
 /// `[section]` / `key=value` text, in order. Lines that are neither are skipped.
 #[derive(Default, Debug)]
 struct Ini {
@@ -439,6 +477,21 @@ impl Store {
 
     // ---- settings.ini ----
 
+    pub fn window_placement(&self) -> Option<WindowPlacement> {
+        WindowPlacement::parse(self.read_ini("settings.ini").get("window", "placement")?)
+    }
+
+    pub fn set_window_placement(&self, placement: WindowPlacement) {
+        let value = placement.encode();
+        self.modify("settings.ini", |ini| {
+            if ini.get("window", "placement") == Some(&value) {
+                return false;
+            }
+            ini.set("window", "placement", Some(&value));
+            true
+        });
+    }
+
     pub fn view(&self) -> ViewMode {
         self.read_ini("settings.ini")
             .get("settings", "view")
@@ -653,6 +706,57 @@ mod tests {
             kind: "setup".into(),
             date: "2026-11-22".into(),
         }
+    }
+
+    #[test]
+    fn window_placement_round_trips_without_losing_other_settings() {
+        let dir = scratch("window");
+        let store = Store::at(&dir);
+        assert_eq!(store.window_placement(), None);
+        store.set_view(ViewMode::Large);
+        let placement = WindowPlacement {
+            position: (-1200, 52),
+            size: (903, 658),
+            maximized: true,
+        };
+        store.set_window_placement(placement);
+        assert_eq!(placement.encode(), "-1200 52 903 658 1");
+        assert_eq!(Store::at(&dir).window_placement(), Some(placement));
+        assert_eq!(store.view(), ViewMode::Large);
+        store.set_window_placement(WindowPlacement {
+            maximized: false,
+            ..placement
+        });
+        assert_eq!(store.window_placement().map(|p| p.maximized), Some(false));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn garbage_window_placement_is_absent() {
+        let dir = scratch("window-garbage");
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::at(&dir);
+        for value in [
+            "",
+            "not a rectangle",
+            "0 1 2 3",
+            "0 1 2 3 0 extra",
+            "0 1 2 3 true",
+            "0 1 0 3 0",
+            "0 1 2 -3 0",
+            "2147483648 1 2 3 0",
+            "0 1 4294967296 3 0",
+            "0 1 2 \u{fffd} 0",
+        ] {
+            std::fs::write(
+                dir.join("settings.ini"),
+                format!("[window]\nplacement = {value}\n[settings]\nview = small\n"),
+            )
+            .unwrap();
+            assert_eq!(store.window_placement(), None, "{value:?}");
+            assert_eq!(store.view(), ViewMode::Small);
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// A crashed holder's lock that cannot be removed (another program, a scanner, has the file

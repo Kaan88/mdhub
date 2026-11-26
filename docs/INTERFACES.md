@@ -42,6 +42,11 @@ Fixed already (do not change signatures without saying so in your report): `cata
   `view() -> ViewMode` (`ViewMode::{List, Large, Small}` in hub-core; `vm::View` in bins/hub is
   mapped from it), `interval_hours` (default 6, 0 = never), `backdrop() -> Backdrop` (the shared
   `mdshared_app::backdrop::Backdrop`, key `backdrop`, default `Off`) and `set_backdrop`.
+- `window_placement() -> Option<WindowPlacement>` / `set_window_placement(WindowPlacement)`:
+  `[window]` in `settings.ini`, `placement=x y width height maximized`. The first two integers
+  are signed physical outer coordinates; width and height are positive logical client pixels
+  for the normal window, and `maximized` is `0` or `1`. Missing or malformed placement is absent.
+  The window shell owns monitor validation, minimum size and CLI overrides.
 - Every read-modify-write of an ini holds a lock file `<dir>\.hub.lock`, so the tray and the
   window cannot lose each other's change; temp files are named per process and write.
 - AS BUILT, detect: the exe's own version resource wins over Hub's record and DisplayVersion.

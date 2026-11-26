@@ -1,10 +1,12 @@
 //! The icon views: the same apps, states and actions as the list, as a grid of tiles. Large tiles
 //! carry the versions, the status and the one action of the row; small tiles carry the icon, the
-//! name and one word, and leave the rest to the pane under the grid and the row menu.
+//! name, one word, and a menu for their actions.
+use crate::motion;
 use crate::ui::{self, amber, blue, green, red};
 use crate::view::{HEAD_H, newer, row_actions, status_of};
 use crate::vm::{AppVm, Hit, Layout, View, Vm};
 use hub_core::model::Row;
+use mdshared_ui::anim::Animator;
 use mdshared_ui::gfx::{Face, Painter, Rect, Rgb, mix};
 use mdshared_ui::glyph;
 use mdshared_ui::theme::Palette;
@@ -16,6 +18,7 @@ pub const LARGE_MIN_W: f32 = 164.0;
 pub const LARGE_H: f32 = 196.0;
 pub const SMALL_MIN_W: f32 = 108.0;
 pub const SMALL_H: f32 = 104.0;
+const SMALL_MENU: f32 = 28.0;
 
 /// Columns, the width of a tile and its height, at window width `w`.
 pub fn geometry(view: View, w: f32) -> (usize, f32, f32) {
@@ -38,12 +41,23 @@ pub fn height(view: View, w: f32, n: usize) -> f32 {
     HEAD_H + PAD + rows as f32 * (h + GAP) - GAP + PAD
 }
 
+/// Bounds of a tile row in scroll space, below the fixed header.
+fn row_bounds(row: usize, tile_h: f32) -> (f32, f32) {
+    let top = PAD + row as f32 * (tile_h + GAP);
+    (top, top + tile_h)
+}
+
+pub fn selection_bounds(view: View, w: f32, i: usize) -> (f32, f32) {
+    let (cols, _, h) = geometry(view, w);
+    row_bounds(i / cols, h)
+}
+
 /// The one word under a small tile, and its colour.
 fn word(pal: &Palette, a: &AppVm) -> (String, Rgb) {
     match &a.row {
         Row::UpToDate => (a.installed.clone().unwrap_or_default(), pal.muted),
         Row::Update => ("Update".into(), blue(pal)),
-        Row::NotInstalled => ("Not installed".into(), pal.faint),
+        Row::NotInstalled => ("Not installed".into(), pal.muted),
         Row::External => ("Not by Hub".into(), pal.muted),
         Row::Downloading(..) => (String::new(), pal.muted),
         Row::Verifying => ("Checking".into(), pal.accent),
@@ -54,9 +68,13 @@ fn word(pal: &Palette, a: &AppVm) -> (String, Rgb) {
     }
 }
 
+fn badge_ink(pal: &Palette) -> Rgb {
+    if pal.dark { pal.page } else { [255; 3] }
+}
+
 /// The badges on a tile: an update (an arrow), a failure (red, !), done (green check), and
 /// running (a green dot at the foot of the icon). `bg` is the colour behind the tile, for the ring.
-fn badges(p: &mut Painter, pal: &Palette, t: Rect, a: &AppVm, bg: Rgb) {
+fn badges(p: &mut Painter, pal: &Palette, t: Rect, a: &AppVm, bg: Rgb, opacity: f32) {
     let d = (t.w * 0.36).clamp(14.0, 20.0);
     let ring = |p: &mut Painter, cx: f32, cy: f32, d: f32, c: Rgb| {
         let o = Rect::new(cx - d / 2.0 - 2.0, cy - d / 2.0 - 2.0, d + 4.0, d + 4.0);
@@ -64,28 +82,37 @@ fn badges(p: &mut Painter, pal: &Palette, t: Rect, a: &AppVm, bg: Rgb) {
         p.rbox(Rect::new(cx - d / 2.0, cy - d / 2.0, d, d), d / 2.0, c);
     };
     let (cx, cy) = (t.right() - 2.0, t.y + 2.0);
-    if newer(&a.row) && !matches!(a.row, Row::Failed(_)) {
-        ring(p, cx, cy, d, pal.accent);
-        p.icon(glyph::DOWNLOAD, d * 0.62, cx, cy, pal.on_accent);
-    } else if matches!(a.row, Row::Failed(_)) {
-        ring(p, cx, cy, d, red(pal));
-        p.text_center(
-            Face::Semibold,
-            d * 0.7,
-            Rect::new(cx - d / 2.0, cy - d / 2.0, d, d),
-            "!",
-            [255, 255, 255],
-        );
-    } else if matches!(a.row, Row::Done(_)) {
-        ring(p, cx, cy, d, green(pal));
-        p.icon(glyph::CHECK, d * 0.62, cx, cy, [255, 255, 255]);
+    if newer(&a.row) || matches!(a.row, Row::Done(_)) {
+        let badge = Rect::new(cx - d / 2.0, cy - d / 2.0, d, d);
+        let under = (opacity < 1.0).then(|| p.snapshot(badge.inset(-3.0)));
+        if matches!(a.row, Row::Failed(_)) {
+            ring(p, cx, cy, d, red(pal));
+            p.text_center(Face::Semibold, d * 0.7, badge, "!", badge_ink(pal));
+        } else if matches!(a.row, Row::Done(_)) {
+            ring(p, cx, cy, d, green(pal));
+            p.icon(glyph::CHECK, d * 0.62, cx, cy, badge_ink(pal));
+        } else {
+            ring(p, cx, cy, d, pal.accent);
+            p.icon(glyph::DOWNLOAD, d * 0.62, cx, cy, pal.on_accent);
+        }
+        if let Some(under) = under {
+            p.fade(&under, opacity);
+        }
     }
     if a.running {
         ring(p, t.right() - 2.0, t.bottom() - 2.0, d * 0.6, green(pal));
     }
 }
 
-pub fn draw(p: &mut Painter, pal: &Palette, r: Rect, vm: &Vm, scroll: f32, lay: &mut Layout) {
+pub fn draw(
+    p: &mut Painter,
+    pal: &Palette,
+    r: Rect,
+    vm: &Vm,
+    scroll: f32,
+    lay: &mut Layout,
+    anim: &mut Animator,
+) {
     p.fill(r, pal.page);
     let px = p.px().max(1.0);
     let body = Rect::new(r.x, r.y + HEAD_H, r.w, (r.h - HEAD_H).max(0.0));
@@ -95,7 +122,7 @@ pub fn draw(p: &mut Painter, pal: &Palette, r: Rect, vm: &Vm, scroll: f32, lay: 
         let (col, row) = (k % cols, k / cols);
         let c = Rect::new(
             r.x + MARGIN + col as f32 * (cw + GAP),
-            body.y + PAD + row as f32 * (ch + GAP) - scroll,
+            body.y + row_bounds(row, ch).0 - scroll,
             cw,
             ch,
         );
@@ -106,8 +133,8 @@ pub fn draw(p: &mut Painter, pal: &Palette, r: Rect, vm: &Vm, scroll: f32, lay: 
             break;
         }
         let hits = match vm.view {
-            View::Small => small(p, pal, c, vm, k, a),
-            _ => large(p, pal, c, vm, k, a),
+            View::Small => small(p, pal, c, vm, k, a, anim),
+            _ => large(p, pal, c, vm, k, a, anim),
         };
         for (rect, hit) in std::iter::once((c, Hit::Row(k))).chain(hits) {
             if let Some(v) = ui::intersect(rect, body) {
@@ -151,11 +178,11 @@ fn ground(
     c: Rect,
     vm: &Vm,
     i: usize,
-    a: &AppVm,
+    anim: &mut Animator,
     framed: bool,
 ) -> Rgb {
     let sel = vm.sel == i;
-    let failed = matches!(a.row, Row::Failed(_));
+    let failed = matches!(vm.apps[i].row, Row::Failed(_));
     let base = if sel {
         pal.on
     } else if vm.hover == Some(i) {
@@ -165,11 +192,12 @@ fn ground(
     } else {
         pal.page
     };
-    let bg = if failed {
+    let target = if failed {
         mix(base, red(pal), if pal.dark { 0.12 } else { 0.08 })
     } else {
         base
     };
+    let bg = motion::row_ground(anim, vm.view, motion::app_key(vm, i), target);
     if sel {
         p.frame(c, 8.0, bg, pal.accent);
     } else if framed {
@@ -180,6 +208,46 @@ fn ground(
     bg
 }
 
+const VERSION_SIZE: f32 = 12.0;
+const ARROW: &str = " \u{2192} ";
+
+/// Fit the versions before centring them. A short version gives its spare width to the other.
+fn version_line(
+    p: &mut Painter,
+    line: Rect,
+    face: Face,
+    first: &str,
+    second: Option<&str>,
+) -> (f32, String, Option<String>) {
+    let fit = |p: &mut Painter, face, text: &str, width| {
+        let s = p.elide(face, VERSION_SIZE, text, width);
+        // Shared elide can return an ellipsis even when there is no space for it.
+        if p.measure(face, VERSION_SIZE, &s) <= width {
+            s
+        } else {
+            String::new()
+        }
+    };
+    if let Some(second) = second {
+        let arrow = p.measure(Face::Ui, VERSION_SIZE, ARROW);
+        if line.w > arrow {
+            let available = line.w - arrow;
+            let aw = p.measure(face, VERSION_SIZE, first);
+            let bw = p.measure(Face::Semibold, VERSION_SIZE, second);
+            let a_max = (available - bw.min(available / 2.0)).min(aw);
+            let a = fit(p, face, first, a_max);
+            let aw = p.measure(face, VERSION_SIZE, &a);
+            let b = fit(p, Face::Semibold, second, available - aw);
+            if !a.is_empty() && !b.is_empty() {
+                let w = aw + arrow + p.measure(Face::Semibold, VERSION_SIZE, &b);
+                return (line.cx() - w / 2.0, a, Some(b));
+            }
+        }
+    }
+    let a = fit(p, face, first, line.w);
+    (line.cx() - p.measure(face, VERSION_SIZE, &a) / 2.0, a, None)
+}
+
 fn large(
     p: &mut Painter,
     pal: &Palette,
@@ -187,17 +255,27 @@ fn large(
     vm: &Vm,
     i: usize,
     a: &AppVm,
+    anim: &mut Animator,
 ) -> Vec<(Rect, Hit)> {
     let mut hits = Vec::new();
-    let bg = ground(p, pal, c, vm, i, a, true);
+    let key = motion::app_key(vm, i);
+    let bg = ground(p, pal, c, vm, i, anim, true);
+    let opacity = motion::status(anim, key, &a.row);
+    let amount = motion::progress(anim, key, &a.row);
     let not_in = matches!(a.row, Row::NotInstalled);
     let cx = c.cx();
     // The icon.
     let t = Rect::new(cx - 28.0, c.y + 16.0, 56.0, 56.0);
     ui::app_tile(p, t, a.id, a.glyph, a.tile, not_in);
-    badges(p, pal, t, a, bg);
+    badges(p, pal, t, a, bg, opacity);
     let menu = Rect::new(c.right() - 30.0, c.y + 4.0, 26.0, 26.0);
-    ui::icon_fill(p, pal, menu, bg, vm.pointer.look(Hit::Menu(i)));
+    ui::icon_fill(
+        p,
+        pal,
+        menu,
+        bg,
+        motion::button(anim, (vm.view, key, "menu"), vm.pointer, Hit::Menu(i)),
+    );
     p.icon(glyph::MORE, 15.0, c.right() - 16.0, c.y + 16.0, pal.muted);
     hits.push((menu, Hit::Menu(i)));
     // Name and blurb.
@@ -221,12 +299,12 @@ fn large(
     let vy = c.y + 126.0;
     let bar_w = (c.w - 44.0).max(0.0);
     match &a.row {
-        Row::Downloading(f, _) => {
+        Row::Downloading(..) => {
             ui::progress(
                 p,
                 pal,
                 Rect::new(c.x + 22.0, vy - 3.0, bar_w, 6.0),
-                *f,
+                amount,
                 pal.accent,
                 bg,
             );
@@ -236,7 +314,7 @@ fn large(
                 p,
                 pal,
                 Rect::new(c.x + 22.0, vy - 3.0, bar_w, 6.0),
-                1.0,
+                amount,
                 mix(pal.accent, pal.page, 0.45),
                 bg,
             );
@@ -244,27 +322,26 @@ fn large(
         row => {
             let latest = a.latest.clone().unwrap_or_else(|| "\u{2014}".into());
             let (first, second) = match (&a.installed, newer(row)) {
-                (Some(v), true) => (ui::cap(v, 30), Some(ui::cap(&latest, 30))),
-                (Some(v), false) => (ui::cap(v, 30), None),
-                (None, _) if a.size.is_empty() => (ui::cap(&latest, 30), None),
-                (None, _) => (format!("{} \u{b7} {}", ui::cap(&latest, 30), a.size), None),
+                // A full parsed version may be up to 62 characters.
+                (Some(v), true) => (ui::cap(v, 64), Some(ui::cap(&latest, 64))),
+                (Some(v), false) => (ui::cap(v, 64), None),
+                (None, _) if a.size.is_empty() => (ui::cap(&latest, 64), None),
+                (None, _) => (format!("{} \u{b7} {}", ui::cap(&latest, 64), a.size), None),
             };
             let face = if a.installed.is_some() {
                 Face::Mono
             } else {
                 Face::Ui
             };
-            let aw = p.measure(face, 12.0, &first);
-            let arrow = " \u{2192} ";
-            let bw = second.as_ref().map_or(0.0, |b| {
-                p.measure(Face::Ui, 12.0, arrow) + p.measure(Face::Semibold, 12.0, b)
-            });
-            let mut x = cx - (aw + bw) / 2.0;
-            x += p.text(face, 12.0, x, vy, &first, pal.muted, tw);
+            let (mut x, first, second) = version_line(p, line(vy), face, &first, second.as_deref());
+            let old = p.clip(c);
+            let max = f32::INFINITY; // already fitted; keep the measured advances
+            x += p.text(face, VERSION_SIZE, x, vy, &first, pal.muted, max);
             if let Some(b) = second {
-                x += p.text(Face::Ui, 12.0, x, vy, arrow, pal.faint, 40.0);
-                p.text(Face::Semibold, 12.0, x, vy, &b, blue(pal), 80.0);
+                x += p.text(Face::Ui, VERSION_SIZE, x, vy, ARROW, pal.faint, max);
+                p.text(Face::Semibold, VERSION_SIZE, x, vy, &b, blue(pal), max);
             }
+            p.restore(old);
         }
     }
     // The status line: the tile has no room for a second line, so the reason joins it.
@@ -286,7 +363,7 @@ fn large(
     let w = p.measure(Face::Ui, 12.0, &text).min((tw - lead).max(0.0));
     let x0 = cx - (w + lead) / 2.0;
     if let Some(d) = s.dot {
-        ui::dot(p, x0, sy, d);
+        ui::dot(p, x0, sy, mix(bg, d, opacity));
     }
     p.text(
         Face::Ui,
@@ -294,7 +371,7 @@ fn large(
         x0 + lead,
         sy,
         &text,
-        col,
+        mix(bg, col, opacity),
         (tw - lead).max(0.0),
     );
     // The action.
@@ -307,7 +384,12 @@ fn large(
             c.y + 174.0,
             b.label,
             b.primary,
-            vm.pointer.look(Hit::Action(i, b.act)),
+            motion::button(
+                anim,
+                (vm.view, key, b.act),
+                vm.pointer,
+                Hit::Action(i, b.act),
+            ),
         );
         hits.push((r, Hit::Action(i, b.act)));
     }
@@ -321,13 +403,25 @@ fn small(
     vm: &Vm,
     i: usize,
     a: &AppVm,
+    anim: &mut Animator,
 ) -> Vec<(Rect, Hit)> {
-    let bg = ground(p, pal, c, vm, i, a, false);
+    let key = motion::app_key(vm, i);
+    let bg = ground(p, pal, c, vm, i, anim, false);
+    let opacity = motion::status(anim, key, &a.row);
     let dim = matches!(a.row, Row::NotInstalled);
     let cx = c.cx();
     let t = Rect::new(cx - 22.0, c.y + 12.0, 44.0, 44.0);
     ui::app_tile(p, t, a.id, a.glyph, a.tile, dim);
-    badges(p, pal, t, a, bg);
+    badges(p, pal, t, a, bg, opacity);
+    let menu = Rect::new(c.x + 4.0, c.y + 4.0, SMALL_MENU, SMALL_MENU);
+    ui::icon_fill(
+        p,
+        pal,
+        menu,
+        bg,
+        motion::button(anim, (vm.view, key, "menu"), vm.pointer, Hit::Menu(i)),
+    );
+    p.icon(glyph::MORE, 15.0, menu.cx(), menu.cy(), pal.muted);
     let tw = (c.w - 12.0).max(0.0);
     let line = |y: f32| Rect::new(c.x + 6.0, y - 9.0, tw, 18.0);
     p.text_center(
@@ -338,11 +432,11 @@ fn small(
         pal.text,
     );
     match &a.row {
-        Row::Downloading(f, _) => ui::progress(
+        Row::Downloading(..) => ui::progress(
             p,
             pal,
             Rect::new(c.x + 18.0, c.y + 84.0, (c.w - 36.0).max(0.0), 5.0),
-            *f,
+            motion::progress(anim, key, &a.row),
             pal.accent,
             bg,
         ),
@@ -353,8 +447,101 @@ fn small(
             } else {
                 Face::Ui
             };
-            p.text_center(face, 11.5, line(c.y + 87.0), &ui::cap(&wd, 40), col);
+            p.text_center(
+                face,
+                11.5,
+                line(c.y + 87.0),
+                &ui::cap(&wd, 40),
+                mix(bg, col, opacity),
+            );
         }
     }
-    Vec::new()
+    vec![(menu, Hit::Menu(i))]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mdshared_text::bitmap::Bitmap;
+    use mdshared_ui::gfx::Gfx;
+    use mdshared_ui::theme::{DARK, LIGHT};
+
+    #[test]
+    fn the_small_tile_has_an_independent_overflow_hit_away_from_the_badge() {
+        let mut bmp = Bitmap::new(520, 360);
+        let mut gfx = Gfx::new();
+        let mut p = Painter::new(&mut bmp, &mut gfx, 1.0);
+        let vm = crate::demo::build("all", View::Small).unwrap();
+        for w in [520.0, 488.0] {
+            let mut lay = Layout::default();
+            draw(
+                &mut p,
+                &DARK,
+                Rect::new(0.0, 0.0, w, 360.0),
+                &vm,
+                0.0,
+                &mut lay,
+                &mut crate::motion::still(),
+            );
+            for i in [0, 2] {
+                // Not installed and update badge.
+                let rect = |hit| lay.hits.iter().find(|(_, h)| *h == hit).unwrap().0;
+                let tile = rect(Hit::Row(i));
+                let menu = rect(Hit::Menu(i));
+                assert_eq!(menu, Rect::new(tile.x + 4.0, tile.y + 4.0, 28.0, 28.0));
+                assert_eq!(lay.at(menu.cx(), menu.cy()), Hit::Menu(i));
+                assert_eq!(lay.at(tile.cx() + 20.0, tile.y + 14.0), Hit::Row(i));
+            }
+        }
+    }
+
+    #[test]
+    fn not_installed_is_muted_and_badge_glyphs_contrast_in_both_themes() {
+        let luminance = |color: Rgb| {
+            let linear = |c: u8| {
+                let c = f64::from(c) / 255.0;
+                if c <= 0.04045 {
+                    c / 12.92
+                } else {
+                    ((c + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * linear(color[0]) + 0.7152 * linear(color[1]) + 0.0722 * linear(color[2])
+        };
+        let vm = crate::demo::build("first-run", View::Small).unwrap();
+        for pal in [LIGHT, DARK] {
+            assert_eq!(word(&pal, &vm.apps[0]), ("Not installed".into(), pal.muted));
+            let ink = badge_ink(&pal);
+            assert_eq!(ink, if pal.dark { pal.page } else { [255; 3] });
+            for fill in [red(&pal), green(&pal)] {
+                let (a, b) = (luminance(ink), luminance(fill));
+                assert!((a.max(b) + 0.05) / (a.min(b) + 0.05) >= 4.5);
+            }
+        }
+    }
+
+    #[test]
+    fn two_long_versions_are_elided_then_centered_inside_a_minimum_width_tile() {
+        let mut bmp = Bitmap::new(520, 360);
+        let mut gfx = Gfx::new();
+        let (_, cw, _) = geometry(View::Large, 520.0);
+        let line = Rect::new(26.0, 126.0, cw - 20.0, 20.0);
+        let vm = crate::demo::build("long-versions", View::Large).unwrap();
+        let a = vm.apps[0].installed.as_deref().unwrap();
+        let b = vm.apps[0].latest.as_deref().unwrap();
+        for scale in [1.0, 1.25, 2.0] {
+            let mut p = Painter::new(&mut bmp, &mut gfx, scale);
+            let (x, shown_a, shown_b) = version_line(&mut p, line, Face::Mono, a, Some(b));
+            let shown_b = shown_b.unwrap();
+            assert!(shown_a.ends_with('…') && shown_b.ends_with('…'));
+            let w = p.measure(Face::Mono, VERSION_SIZE, &shown_a)
+                + p.measure(Face::Ui, VERSION_SIZE, ARROW)
+                + p.measure(Face::Semibold, VERSION_SIZE, &shown_b);
+            assert!(x >= line.x && x + w <= line.right() + 0.001);
+            assert!((x + w / 2.0 - line.cx()).abs() < 0.001);
+            let (_, short, long) = version_line(&mut p, line, Face::Mono, "1.0.0", Some(b));
+            assert_eq!(short, "1.0.0");
+            assert!(long.unwrap().len() >= shown_b.len(), "use the spare width");
+        }
+    }
 }

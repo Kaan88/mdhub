@@ -1,8 +1,10 @@
 //! Fake Vm states for the pictures and the tests: `hub --shot out.png --demo NAME`.
 //! Everything here is made up; nothing reads this PC.
-use crate::glue::{Phase, Slot, app_vm, close_question};
+use crate::glue::{MenuItem, Phase, Slot, app_vm, close_question};
 use crate::settings;
-use crate::vm::{Act, AppVm, Banner, Hit, NotesState, NotesVm, Pointer, View, Vm};
+use crate::vm::{
+    Act, AppVm, Banner, Hit, Layout, NotesState, NotesVm, OfferKey, Pointer, View, Vm,
+};
 use hub_core::catalog::{CATALOG, CatalogApp};
 use hub_core::model::{Latest, Row};
 
@@ -21,12 +23,20 @@ pub const NAMES: &[&str] = &[
     "settings-general",
     "settings-updates",
     "settings-about",
+    "settings-interval-menu",
+    "row-menu",
+    "small-install-menu",
+    "long-versions",
     "notes",
+    "notes-offer",
     "notes-loading",
     "notes-failed",
     "notes-nofile",
     "notes-long",
     "notes-bar-active",
+    "notes-focus-back",
+    "notes-focus-retry",
+    "notes-focus-page",
     "hover-close",
     "hover-min",
     "hover-bar",
@@ -39,6 +49,12 @@ pub const NAMES: &[&str] = &[
     "close-question-no",
     "backdrop-mica",
     "backdrop-acrylic",
+    "filter-results",
+    "filter-edit",
+    "filter-no-matches",
+    "narrow-columns",
+    "maximized-chrome",
+    "narrow-long-notice",
 ];
 
 /// The window backdrop a demo's picture is drawn with: the main window with its chrome keyed
@@ -49,6 +65,50 @@ pub fn backdrop(name: &str) -> mdshared_app::backdrop::Backdrop {
         "backdrop-mica" => Backdrop::Mica,
         "backdrop-acrylic" => Backdrop::Acrylic,
         _ => Backdrop::Off,
+    }
+}
+
+/// Demo overlays are pictures, not input models. Draw through the same paths as a live
+/// overlay but force the settled endpoint regardless of the user's system settings.
+pub fn draw_overlays(
+    p: &mut mdshared_ui::gfx::Painter,
+    pal: &mdshared_ui::theme::Palette,
+    area: mdshared_ui::gfx::Rect,
+    vm: &Vm,
+    lay: &Layout,
+) {
+    if vm.demo_menu
+        && let Some((anchor, _)) = lay.hits.iter().find(|(_, h)| *h == Hit::Menu(0))
+        && let Some(app) = vm.apps.first()
+    {
+        let installed = app.installed.is_some();
+        let items = vec![
+            (MenuItem::Open, "Open", installed),
+            (MenuItem::ShowInFolder, "Show in folder", installed),
+            (MenuItem::ReleaseNotes, "Release notes", true),
+            (MenuItem::SkipVersion, "Skip this version", false),
+            (MenuItem::GitHub, "GitHub", true),
+        ];
+        let items = if vm.view == View::Small {
+            crate::glue::small_menu_items(app, items)
+        } else {
+            items
+        };
+        crate::popup::Popup::new(app.id, *anchor, vm.view, items).draw(
+            p,
+            pal,
+            area,
+            1.0,
+            &mut crate::motion::still(),
+        );
+    }
+    if let Some((rows, page)) = &vm.settings {
+        let mut card = settings::Card::new(rows.clone(), *page);
+        if vm.demo_dropdown {
+            card.layout(p, area);
+            card.open_dropdown(settings::INTERVAL);
+        }
+        card.draw_motion(p, pal, area, 1.0, &mut crate::motion::still());
     }
 }
 
@@ -63,7 +123,7 @@ An option to leave out tabs you barely looked at, and a **tidier AI menu**. This
 - The AI menu lists *saved prompts* first, then the commands. A long prompt's name no longer runs under its `Modify` button.
 - Find in files remembers the last folder.
   - It also remembers the file filter, such as `*.rs`.
-  - Clear both with the [reset link](https://github.com/Kaan88/markdown-editor-rs).
+  - Use [Reset filters](https://github.com/Kaan88/markdown-editor-rs) to clear both.
 
 ## Fixed
 
@@ -220,6 +280,7 @@ fn vm(apps: Vec<AppVm>, sel: usize, view: View) -> Vm {
         checked: "Checked 4 minutes ago".into(),
         hub_version: "0.1.0".into(),
         updates,
+        maximized: false,
         ..Vm::default()
     }
 }
@@ -229,6 +290,50 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
     let r = Some;
     Some(match name {
         "backdrop-mica" | "backdrop-acrylic" => build("main", view)?,
+        "row-menu" | "small-install-menu" => {
+            let mut v = build(if name == "row-menu" { "main" } else { "first-run" }, view)?;
+            v.demo_menu = true;
+            v
+        }
+        "long-versions" => {
+            let mut v = build("main", view)?;
+            v.apps[0].installed = Some("1.2.0-rc.20261126.windows.1".into());
+            v.apps[0].latest = Some("1.2.1-rc.20261126.windows.2".into());
+            v
+        }
+        "notes-offer" => {
+            let mut v = build("notes", view)?;
+            v.banner = Some(close_question("mdedit", app_offer("mdedit", "1.2.1")));
+            v
+        }
+        "notes-focus-back" | "notes-focus-retry" | "notes-focus-page" => {
+            let mut v = build("notes-failed", view)?;
+            v.notes_focus = match name {
+                "notes-focus-back" => Hit::NotesBack,
+                "notes-focus-retry" => Hit::NotesRetry,
+                _ => Hit::NotesPage,
+            };
+            v
+        }
+        "filter-results" | "filter-edit" | "filter-no-matches" => {
+            let mut v = build("main", view)?;
+            v.filter = if name == "filter-no-matches" { "nothing matches" } else { "mdedit" }.into();
+            v.apps.retain(|a| a.id == v.filter);
+            v.filter_focus = name == "filter-edit";
+            v
+        }
+        "narrow-columns" => build("claude-switch", view)?,
+        "maximized-chrome" => {
+            let mut v = build("main", view)?;
+            v.maximized = true;
+            v
+        }
+        "narrow-long-notice" => {
+            let mut v = build("main", view)?;
+            v.checked = "Last check failed: GitHub could not be reached. Hub kept saved release information so you can try again later.".into();
+            v.hub_version = "0.1.5 (0.2.0 ready)".into();
+            v
+        }
         "main" => vm(
             vec![
                 app("mdedit", Row::Update, r("1.2.0"), r("1.2.1"), false),
@@ -366,12 +471,12 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
         "banner" => {
             let mut v = build("main", view)?;
             v.banner = Some(Banner {
+                key: OfferKey { app: None, version: "0.2.0".into(), serial: 0 },
                 // The words the engine gives (`selfupdate::Status::label`).
                 text: "Hub 0.2.0 is ready: restart to finish".into(),
                 yes: "Restart now".into(),
                 no: "Later".into(),
                 warn: false,
-                hub: true,
             });
             v.hub_version = "0.1.0 (0.2.0 ready)".into();
             v.hover = Some(1);
@@ -379,7 +484,7 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
         }
         // The sliders button's card over the main window; the About page with Hub's own update
         // downloaded and its banner showing.
-        "settings-general" | "settings-updates" | "settings-about" => {
+        "settings-general" | "settings-updates" | "settings-about" | "settings-interval-menu" => {
             let about = name == "settings-about";
             let mut v = build(if about { "banner" } else { "main" }, view)?;
             let m = settings::Model {
@@ -402,6 +507,7 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
                 _ => 0,
             };
             v.settings = Some((settings::rows(&m), page));
+            v.demo_dropdown = name == "settings-interval-menu";
             v
         }
         "all" => {
@@ -516,7 +622,7 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
         // "main"): the bar alone, then with the pointer on its yes and on its no.
         "close-question" | "close-question-yes" | "close-question-no" => {
             let mut v = build("main", view)?;
-            v.banner = Some(close_question("Inbound"));
+            v.banner = Some(close_question("Inbound", app_offer("inbound", "0.9.0")));
             v.sel = 3;
             v.pointer.hot = match name {
                 "close-question-yes" => Hit::BannerYes,
@@ -527,6 +633,14 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
         }
         _ => return None,
     })
+}
+
+fn app_offer(id: &'static str, version: &str) -> OfferKey {
+    OfferKey {
+        app: Some(id),
+        version: version.into(),
+        serial: 0,
+    }
 }
 
 fn unreleased(id: &str) -> AppVm {

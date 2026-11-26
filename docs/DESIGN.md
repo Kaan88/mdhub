@@ -56,11 +56,11 @@ m`; the tests and the samples use it).
 ## state.rs
 `Store {dir}`, `Store::open()` (`$HUB_DATA`, else `%LOCALAPPDATA%\Hub`; created on demand),
 `Store::at(dir)` for tests. `installed.ini` (a section per app: folder, exe, version, kind, date),
-`settings.ini` (`view`, `interval_hours` default 6, `backdrop` default off, `[skipped]`), `checks.ini` (last attempt,
-failure count), `latest\<id>.txt` (the cached manifest text, so the window has rows with no
-network), `cache\<id>-<version>` and a `rollback_dir`. Every read-modify-write holds
-`.hub.lock`, a stale lock is broken, temp files are named per process and write, and writes
-rename. A file over its limit or damaged reads as empty; nothing panics.
+`settings.ini` (`view`, `interval_hours` default 6, `backdrop` default off, `[skipped]`, `[window]`
+placement), `checks.ini` (last attempt, failure count), `latest\<id>.txt` (cached manifest text, so
+the window has rows with no network), `cache\<id>-<version>` and a `rollback_dir`. Every
+read-modify-write holds `.hub.lock`, a stale lock is broken, temp files are named per process
+and write, and writes rename. A file over its limit or damaged reads as empty; nothing panics.
 
 ## detect.rs
 The plan's 3.2 order: Hub's record (while its exe still exists), then the uninstall entries
@@ -110,9 +110,22 @@ programs the test builds and a `SetupRunner`, never a real installer.
 `Vm` is everything the window shows (apps with their `Row`, versions, date, size, notes, details;
 selection; view; offer bar; status text; a busy text); `draw(painter, palette, w, h, vm) ->
 Layout` paints the title row, command bar, the list or the grid (large tiles carry versions,
-status and one action; small tiles an icon, a name and one word), the pane under it ("What's
-new" and the details of the release) and the status bar, and returns every hit rect. Drawn with
-`mdshared-ui` (frameless title, buttons, theme `LIGHT`/`DARK`). Every number is a constant.
+status and one action; small tiles an icon, a name, a status and an overflow menu), the pane
+under it ("What's new" and the details of the release) and the status bar, and returns every
+hit rect. Drawn with `mdshared-ui` (frameless title, buttons, theme `LIGHT`/`DARK`). The title
+uses the live maximized state to choose Maximize or Restore; offscreen demos start unmaximized
+unless specified.
+The list drops Installed and Latest together when they would leave less than 110 logical px of
+name text after the icon and gutters. The column starts determine the heads, cells and action
+strip; the list publishes the button rectangles returned by the painter, clipped to the strip
+and visible row body. In the footer the globe and Hub version keep their slots. A privacy line
+is drawn only whole; if it will not fit beside the full notice and version, it goes away before
+the variable notice is elided.
+
+Large tiles fit the arrow and both versions inside one padded line, shortening the versions
+before measuring and centering them. In both grids, failure and done badges use dark ink in dark
+mode and white ink in light mode; the small tile's "Not installed" status remains readable with
+a dimmed app icon.
 
 `appicon.rs`: each catalog app's own icon (`assets/apps/<id>.png`, 128 px, `include_bytes!`).
 `ui::app_tile` calls `appicon::draw`, which decodes the PNG on the first draw that needs it
@@ -123,29 +136,42 @@ fades it and pulls it to grey. A PNG that does not decode returns `false` and `u
 the catalog's colour and glyph; the title bar's own mark still uses the glyph tile. The badges are
 drawn over the icon as before.
 
-Hover and press (D-032): `Vm.pointer` is a `Pointer { hot, held }`, the `Hit` under the pointer
-and the one the left button went down on. Every button draws from it through `Pointer::look(hit)`:
-the window buttons and the offer bar through the shared `draw_win_button` / `OfferBarState`, the
-command bar's buttons, the sliders button, the view switch and the notes page's back arrow through
-`button_fill` (`ui::quiet_fill`), the accent buttons a step towards the page (`ui::accent_fill`,
-as the shared offer bar does), the row and tile buttons (`ui::sbtn`) a step past `pal.hover` with a
-stronger frame (the row under them is lit too), the "..." menus a step past their row or tile
-(`ui::icon_fill`); the pane's "Release notes" link is underlined. A held control looks pressed only
-while the pointer is still on it. The offer bar's X is a hit of its own (`Hit::BannerClose`, the
-same command as its No) so it lights alone. The engine keeps the pointer (`set_hot`, `set_held`,
-true only on a change); `app.rs` sets it on a move (none on a resize edge, under the card or a
-menu), on leaving, on press and release, on losing focus, and after each frame, and redraws only
-when it changed: nothing runs while the pointer rests. The close question (`glue::close_question`)
-is a warning: `warn: true`, the offer bar's warning sign in place of the download arrow.
+Hover and press (D-032, D-036, D-038): `Vm.pointer` holds the hot and pressed `Hit`. Caption and view
+buttons use the shared animated chrome; Hub's buttons, row/tile fills and release-notes link use
+`document::HOVER`. A held control looks pressed only while the pointer is over it. The offer
+bar uses shared `OfferBarState`, blending just the changed button rectangles during fades. For an
+app-close question only, Hub passes the shared painter a local palette copy with `bar = warn_bg`
+and `muted = warn`; the restart offer uses the ordinary palette.
+Per-app tracks use catalog IDs, not filtered row positions. Status labels, dots and badges fade
+in when the row changes phase; text, actions and their targets update immediately. Download
+extent glides with `fluent::MOVE`; progress reports do not restart the status fade.
+
+`motion.rs` keeps the shared `Animator`, a `PageTransition`, and their next wake per window.
+The winit loop takes that deadline alongside its existing check, close and test timers, consumes
+it once when due and schedules nothing further when the animator settles. Minimized or destroyed
+windows don't animate. Windows' Animation effects setting is read at first draw, on focus/theme
+changes and via shared's preference-change wake. No replacement of the tray/window host.
+`PageTransition` snapshots the opaque content below the command/offer strip for list/grid and
+release-notes changes (including the fetched text arriving); command bars and the notes Back
+button stay live. While blending old pixels, Hub withholds hits in the mixed region. A new size,
+scale or region cancels the old snapshot. If an overlay covered the outgoing page, Hub redraws
+that base once so the overlay is not captured. `popup.rs` keeps the catalog context menu in a
+shared presence slot and uses shared menu rendering for placement, hover, entry and exit. The
+small tile's 28 px top-left overflow button anchors the menu at its left edge (D-041); its row
+actions come first, then the existing secondary commands with no duplicate Open. The engine
+checks that a picked row action is still available and dispatches it through the same command
+as a row button, including the app-close consent check for Update.
 
 ## bins/hub: demo.rs, shot.rs
 `hub --shot out.png [--size WxH] [--scale N] [--light|--dark] [--view list|large|small] [--demo
 NAME]` renders a `Vm` with no window and no read of this PC. `demo.rs` builds the made-up Vms
 (`main, first-run, updating, failed, done, noinfo, running, banner, all, claude-switch, empty`, the notes and
-settings states, and the pointer states `hover-close hover-min hover-bar hover-primary
-pressed-primary hover-open hover-menu close-question close-question-yes close-question-no`);
-`tests/shots.sh`
-renders all of them. A shot is limited to 64 million pixels. `backdrop-mica` and
+settings states, `row-menu`, `small-install-menu` (Install on a small tile), `long-versions`
+(large tiles at the 520×360 minimum), and the pointer states `hover-close hover-min hover-bar hover-primary
+pressed-primary hover-open hover-menu close-question close-question-yes close-question-no`,
+the three `notes-focus-*` stops, `filter-results`, `filter-edit`, `filter-no-matches`,
+`narrow-columns`, `narrow-long-notice`, and `maximized-chrome`). `tests/shots.sh`
+renders all of them at their settled endpoints. A shot is limited to 64 million pixels. `backdrop-mica` and
 `backdrop-acrylic` are the main window with its chrome keyed out over a stand-in backdrop
 (`frost::preview`); every other state is drawn with the backdrop off.
 
@@ -158,6 +184,43 @@ for, both for tests. `app.rs`: winit and softbuffer, a frameless window, a loop 
 CPU at idle). `cli.rs`: `--behind --no-session --exit-after-ms --trace --demo --check-now --size
 --light/--dark --view`; `HUB_FIRST_CHECK_MS` sets the first check's delay (default 2 minutes).
 `trace.rs`: `--trace` prints stage times, memory and CPU time.
+
+Release activation (D-038): drag/resize and notes scrollbar gestures start on press. Other window
+controls arm on press. The release must hit the same semantic target in the last painted layout
+and that target must still exist in the engine. App controls use app ID and action rather than
+filtered indices. Offers include their owner, release version and issuance serial, so a late
+release cannot answer a replacement even before it has been painted. Focus loss or a target
+removed by a model/layout change disarms the button. Row-menu choices also require press and
+release on the same choice; the settings form keeps its own press/release handling.
+
+Filtering: the wide toolbar always shows the field; under 900 logical px the search button opens
+it, as does Ctrl+F. The toolbar shows Clear while a query is active; an empty result says why.
+Esc in the field clears the query first, then leaves the field, rather than dismissing an offer.
+While editing at a narrow width, the field takes priority if the left commands do not fit.
+`Vm.updates` and Update all use the same catalog-wide eligibility; the grid summary counts only
+visible apps.
+
+Keyboard selection, view switches and changed filter results reveal the selected row or tile,
+using the painter's row heights, grid geometry and the body below the fixed header. Closing
+notes preserves the underlying scroll. Unrelated commands do not snap back to the selection.
+A single pointer resolver supplies hover and the cursor on move and redraw and resolves the
+target at both press and release: active overlays block the base controls, then a captured notes
+drag or a resize edge takes priority over the painted hits. Leaving the window invalidates the
+last position. The filter and notes link
+request Text and Pointer; the notes thumb requests Grab or Grabbing, which winit currently
+maps to the same Windows system cursor.
+
+Window placement (D-037): `placement.rs` works from the current monitor work areas and DPI.
+`[window] placement` stores the normal outer origin in physical desktop pixels (including
+negative coordinates), logical client dimensions, and whether the last non-minimized state was
+maximized. Move and resize update the in-memory snapshot, not the disk. Teardown (close to tray,
+quit or restart) takes one last snapshot and saves if changed. Reopening from the tray uses that
+snapshot even if writing failed; the first open reads `settings.ini`. The normal rectangle is
+placed while hidden and the logical size is checked at the window's actual DPI before maximizing.
+If the draggable title bar is not reachable on any monitor, the default is centered in the
+primary work area; the client minimum is 520×360. `--size` opens centered and unmaximized without
+reading or writing placement; `--demo` and `--shot` also never touch the saved placement.
+
 Closing an app: an install of an open app waits for the offer bar's yes, which covers that one
 install only (D-025); a roll back of an open app is not started (D-026); when the bar asks and
 there is no window, `app.rs` makes one (`tray::wants_window`), and closing it answers "Not now".
@@ -175,9 +238,14 @@ The engine (`glue.rs`) holds `notes: Option<NotesOpen>`: `Cmd::OpenNotes` (pane 
 key `n`) fills it from the manifest Hub knows and the disk, else starts `work::spawn_notes`, whose
 `Event::Notes {id, version, result}` is taken only by a view still waiting for exactly that
 version (a closed or moved view drops it; the worker has cached it anyway). `Cmd::NotesRetry`
-fetches again from Failed only; `Cmd::NotesPage` opens the release page; Esc and `NotesClose` leave.
-`Vm.notes: Option<NotesVm>` makes `view::draw_full` draw the page instead of the command bar, list
-and pane; `Layout` reports `notes_max_scroll` and `notes_view_h` and new hits `Notes(i)`,
+fetches again from Failed only; `Cmd::NotesPage` opens the release page. Notes clears the filter's
+focus on open without clearing its query or selection. Its exclusive key scope keeps Esc and
+Backspace for Back, Tab/Shift+Tab cycle Back, Try again (when failed) and View on GitHub,
+and Enter acts only on the focused notes control. The focus mark uses that control's painted hit
+rectangle; focusing Retry reveals it if the failure text pushed it below the viewport.
+`Vm.notes: Option<NotesVm>` makes the view draw the page instead of the command bar, list
+and pane. An offer stays above the notes header in its own strip. `Layout` reports
+`notes_max_scroll` and `notes_view_h` and the hits `Notes(i)`,
 `NotesBack`, `NotesRetry`, `NotesPage`, `NotesTrack`, `NotesThumb` (the thumb front-most), and
 `notes_bar` (track, thumb) as drawn. `app.rs` keeps the page's own scroll (the list's is kept
 while it is open): wheel, arrows, PageUp/PageDown/Space, Home/End (`changelog::scrolled`, pure).
@@ -187,10 +255,12 @@ toward it; `bar_drag` puts the thumb's top at pointer y less dy and turns that i
 offset with the shared `scroll::offset_for_thumb`, clamped, None on a closed page or a non-finite
 number. `app.rs` holds `ngrab` from the press to the release (or the window losing focus), and
 sets `NotesVm.bar_active` before each frame while the pointer is on the bar or drags it: the
-shared bar is then drawn wide (as mdedit's).
+shared bar eases between narrow and wide (the hit track and drag maths stay fixed). The bar
+is inset by the window's resize-band width so its visible thumb is not a resize target.
 The page: header (back arrow, "Release notes of X", the version), the scrolling body in a column
 at most 740 px wide with the shared overlay scrollbar, a footer with `mdedit 1.2.0 -> 1.2.1`, the
-date and "Release page".
+date and "View on GitHub". Markdown link labels are ordinary text with surrounding bold/soft
+styling, not clickable controls.
 `changelog.rs`: `parse` (headings `#`..`###`, bullet and numbered lists with nesting up to 3 and
 continuation lines, paragraphs, fenced code, rules, table rows as mono lines; the rest is text),
 `inline` (bold, italic, code, links as their text, escapes; an opener with no closer is text;
@@ -250,14 +320,21 @@ packs `assets/hub.ico` from this module's output (`-Sheet file.png` for a sheet 
 icon seen live (CLAUDE.md rule 6).
 
 ## settings.rs (bins/hub)
-The rows of the shared `mdshared_ui::settings::Form`: Start Hub with Windows, Show an icon in the
-tray, Tell me when updates are found, Look for updates (Every hour / 6 hours / day / week /
-Never), About line and "Update Hub" (becomes "Restart now" once ready). The engine applies and
-saves a change (`state.rs`); the tray menu changes the same settings and the card is rebuilt
-when its rows differ. Opened by the sliders button (`Hit::Settings`). Shots: `settings-general`,
+The rows of the shared `mdshared_ui::settings::Form`: Start with Windows, Keep Hub in the
+tray, Notify about updates, Check for updates automatically (Every hour / 6 hours / day / week /
+Manually only), About line and "Update Hub" (becomes "Restart now" once ready). The engine applies and
+saves a change (`state.rs`); labels do not affect the stored keys or values. The tray menu shares
+the Start and Notify labels, changes the same settings, and the form's rows are
+updated in place when they differ. Opened by the sliders button (`Hit::Settings`). Shots: `settings-general`,
 `settings-updates`, `settings-about` (the last over the banner state). One page (D-034): the
 shared form's `single_page()`, headings in the body and no category list; `page` only scrolls to a
 heading.
+"Card" retains the form only for painting during exit, with input handed back immediately. Its
+backdrop and card fade through shared dialog motion; the form draws with `Form::draw_animated`
+(switches, segments, hover and scrollbar). `Form`'s own dropdown menu cannot be drawn separately
+or kept for exit at this pin. Hub hands non-segmented choice activation off to a shared `Menu`
+in a `Transient`, keeping the form's field, focus, value and saved-setting path. The settings
+dropdown specimen is `settings-interval-menu`.
 "Window backdrop" (Off / Mica / Acrylic, General group, `state.rs` `backdrop`, off by default) is
 the shared `mdshared_app::backdrop::Backdrop`; the window follows it (`frost.rs` below).
 
@@ -269,7 +346,8 @@ start of each frame with the setting, the window's focus and the palette (it ask
 `backdrop_available` and `set_backdrop` only when the setting or the focus changed; off, one
 comparison). While `Frost::key()` is `Some`, `mark_chrome` stamps the chrome's alpha byte after
 the view is drawn and before the row menu or the card, and `present` runs `key_out_areas` over the
-window's copy of the frame (the bitmap keeps what was drawn). A focus change redraws only when
-the setting concerns the frost. `preview` lays a keyed-out frame over a made-up stand-in for the
+window's copy of the frame (the bitmap keeps what was drawn). Popup and dialog fades get the
+same frost key from their painter; the page blend stays out of frosted chrome. `preview` lays a
+keyed-out frame over a made-up stand-in for the
 shots `backdrop-mica` and `backdrop-acrylic`; `shot::render_with(.., Backdrop::Off)` is
 `render`.

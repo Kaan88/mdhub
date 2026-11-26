@@ -2,7 +2,7 @@
 //! (`FileRoot`), a notes file in the fake release, and what the view shows at each step. Nothing
 //! here reads this PC or the network.
 use crate::e2e_tests::{Fx, body};
-use crate::glue::{Cmd, Event, Key, MenuItem, command, key_command};
+use crate::glue::{Cmd, Event, Key, MenuItem, NotesKey, command, key_command, notes_key};
 use crate::vm::{Hit, NotesState};
 use hub_core::catalog::find;
 use hub_core::manifest;
@@ -104,6 +104,98 @@ fn nothing_asks_for_the_notes_at_start_at_a_check_or_while_the_list_is_used() {
     fx.restart();
     assert!(fx.vm().notes.is_none());
     assert!(notes_urls(&fx).is_empty());
+}
+
+#[test]
+fn opening_notes_blurs_the_filter_but_preserves_its_results_and_selection() {
+    let mut fx = checked("notes-from-filter", true);
+    fx.cmd(Cmd::FilterChar('m'));
+    fx.cmd(Cmd::FilterChar('d'));
+    fx.cmd(Cmd::Select(1));
+    fx.cmd(Cmd::FocusFilter);
+    fx.cmd(Cmd::OpenNotes("mdedit"));
+    assert_eq!(fx.eng.notes_input(), Some(false));
+    assert!(!fx.vm().filter_focus);
+    assert_eq!(fx.vm().filter, "md");
+    pump_notes(&mut fx);
+    fx.cmd(Cmd::NotesClose);
+    assert_eq!(fx.eng.notes_input(), None);
+    assert_eq!(fx.vm().apps[fx.vm().sel].id, "mdview");
+}
+
+#[test]
+fn notes_keys_cycle_and_activate_only_the_notes_controls() {
+    use crate::changelog::Nav;
+    use NotesKey::{Focus, Run, Scroll};
+    let key = |key, focus, retry| notes_key(key, false, false, retry, focus);
+    assert_eq!(key(Key::Tab, Hit::None, false), Some(Focus(Hit::NotesBack)));
+    assert_eq!(
+        key(Key::Tab, Hit::NotesBack, false),
+        Some(Focus(Hit::NotesPage))
+    );
+    assert_eq!(
+        key(Key::Tab, Hit::NotesBack, true),
+        Some(Focus(Hit::NotesRetry))
+    );
+    assert_eq!(
+        key(Key::Tab, Hit::NotesRetry, true),
+        Some(Focus(Hit::NotesPage))
+    );
+    assert_eq!(
+        key(Key::Tab, Hit::NotesPage, true),
+        Some(Focus(Hit::NotesBack))
+    );
+    assert_eq!(
+        notes_key(Key::Tab, true, false, true, Hit::NotesBack),
+        Some(Focus(Hit::NotesPage))
+    );
+    assert_eq!(
+        notes_key(Key::Tab, true, false, true, Hit::NotesPage),
+        Some(Focus(Hit::NotesRetry))
+    );
+    assert_eq!(
+        notes_key(Key::Tab, true, false, false, Hit::None),
+        Some(Focus(Hit::NotesPage))
+    );
+    assert_eq!(
+        key(Key::Enter, Hit::NotesPage, true),
+        Some(Run(Cmd::NotesPage))
+    );
+    assert_eq!(
+        key(Key::Enter, Hit::NotesRetry, true),
+        Some(Run(Cmd::NotesRetry))
+    );
+    assert_eq!(
+        key(Key::Enter, Hit::NotesBack, true),
+        Some(Run(Cmd::NotesClose))
+    );
+    assert_eq!(key(Key::Enter, Hit::NotesRetry, false), None);
+    for unused in [Key::Enter, Key::F5, Key::Char('f'), Key::Char('n')] {
+        assert_eq!(key(unused, Hit::None, true), None);
+    }
+    assert_eq!(
+        notes_key(Key::Enter, false, true, true, Hit::NotesRetry),
+        None
+    );
+    for (input, nav) in [
+        (Key::Up, Nav::LineUp),
+        (Key::Down, Nav::LineDown),
+        (Key::PageUp, Nav::PageUp),
+        (Key::PageDown, Nav::PageDown),
+        (Key::Char(' '), Nav::PageDown),
+        (Key::Home, Nav::Home),
+        (Key::End, Nav::End),
+    ] {
+        assert_eq!(
+            notes_key(input, false, true, true, Hit::NotesPage),
+            Some(Scroll(nav))
+        );
+    }
+    assert_eq!(
+        key(Key::Backspace, Hit::None, false),
+        Some(Run(Cmd::NotesClose))
+    );
+    assert_eq!(key(Key::Esc, Hit::None, false), Some(Run(Cmd::NotesClose)));
 }
 
 #[test]

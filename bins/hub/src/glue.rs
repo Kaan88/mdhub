@@ -3,7 +3,7 @@
 //! the work on worker threads one install at a time, and builds the `Vm` the drawing code reads.
 //! Nothing here touches a window, so every behaviour is tested without one. Nothing here asks the
 //! network anything until a check is asked for (the first one is scheduled, never run at start).
-use crate::vm::{Act, AppVm, Banner, Hit, NotesState, NotesVm, Pointer, View, Vm};
+use crate::vm::{Act, AppVm, Banner, Hit, NotesState, NotesVm, OfferKey, Pointer, View, Vm};
 use crate::work;
 use hub_core::catalog::{CATALOG, CatalogApp};
 use hub_core::check;
@@ -42,6 +42,8 @@ pub enum Event {
     Running(Vec<(&'static str, bool)>),
     /// A second launch asked for this window (the shell raises it, or makes it).
     Raise,
+    /// Windows' animation effects preference changed.
+    MotionChanged,
     /// The tray icon's menu, its icon or its balloon was used (`tray.rs`). Acted on by the shell.
     Tray(crate::tray::TrayCmd),
     /// Hub's own update, looked at and downloaded on the check's worker.
@@ -392,6 +394,11 @@ pub fn row_of(slot: &Slot, now: u64) -> Row {
     }
 }
 
+fn update_eligible(row: &Row) -> bool {
+    // Only an idle slot can produce Row::Update in row_of.
+    *row == Row::Update
+}
+
 fn entry_of(m: &HubManifest) -> Option<&hub_core::model::PlatformEntry> {
     m.entry()
 }
@@ -515,12 +522,14 @@ pub enum Cmd {
     NotesClose,
     /// "Try again" in the notes view.
     NotesRetry,
-    /// "Release page" in the notes view: the release on GitHub, in the browser.
+    /// "View on GitHub" in the notes view: the release on GitHub, in the browser.
     NotesPage,
     FocusFilter,
     FilterChar(char),
     FilterBack,
+    FilterClear,
     FilterBlur,
+    FilterEscape,
     SelectRel(i32),
     /// The selected row's main button.
     Primary,
@@ -530,11 +539,41 @@ pub enum Cmd {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MenuItem {
     Open,
+    Action(Act),
     ShowInFolder,
     ReleaseNotes,
     SkipVersion,
     RollBack,
     GitHub,
+}
+
+/// Small tiles have no separate buttons. Lead with the same available actions a row shows,
+/// then keep its secondary menu entries; Open, when also on the row, appears only once.
+pub fn small_menu_items(
+    app: &AppVm,
+    secondary: Vec<(MenuItem, &'static str, bool)>,
+) -> Vec<(MenuItem, &'static str, bool)> {
+    let mut items: Vec<_> = crate::view::row_actions(app)
+        .iter()
+        .map(|b| {
+            (
+                if b.act == Act::Open {
+                    MenuItem::Open
+                } else {
+                    MenuItem::Action(b.act)
+                },
+                b.label,
+                true,
+            )
+        })
+        .collect();
+    let has_open = items.iter().any(|(item, _, _)| *item == MenuItem::Open);
+    items.extend(
+        secondary
+            .into_iter()
+            .filter(|(item, _, _)| !has_open || *item != MenuItem::Open),
+    );
+    items
 }
 
 pub fn act_cmd(id: &'static str, act: Act) -> Cmd {
@@ -550,13 +589,13 @@ pub fn act_cmd(id: &'static str, act: Act) -> Cmd {
 
 /// The offer bar that asks whether the open app `name` may be closed for its update. It closes a
 /// program the owner has open, so it is a warning: the bar shows the warning sign.
-pub fn close_question(name: &str) -> Banner {
+pub fn close_question(name: &str, key: OfferKey) -> Banner {
     Banner {
-        text: format!("{name} is open: close it and update"),
+        key,
+        text: format!("Updating {name} will close it."),
         yes: "Close and update".into(),
         no: "Not now".into(),
         warn: true,
-        hub: false,
     }
 }
 
@@ -568,7 +607,8 @@ pub fn command(hit: Hit, vm: &Vm) -> Option<Cmd> {
         Hit::CheckNow => Some(Cmd::CheckNow),
         Hit::CancelAll => Some(Cmd::CancelAll),
         Hit::ViewSwitch(v) => Some(Cmd::SetView(v)),
-        Hit::Filter => Some(Cmd::FocusFilter),
+        Hit::Filter | Hit::FilterOpen => Some(Cmd::FocusFilter),
+        Hit::FilterClear => Some(Cmd::FilterClear),
         Hit::Row(i) => id(i).map(|_| Cmd::Select(i)),
         Hit::Action(i, act) => id(i).map(|id| act_cmd(id, act)),
         Hit::Menu(i) => id(i).map(|_| Cmd::OpenMenu(i)),
@@ -578,13 +618,19 @@ pub fn command(hit: Hit, vm: &Vm) -> Option<Cmd> {
         Hit::NotesPage => Some(Cmd::NotesPage),
         // The bar over the list is an app's question or Hub's own "Restart now"; which one it is
         // decides the command, so a stale or doubled click never answers the other bar.
-        Hit::BannerYes => Some(match &vm.banner {
-            Some(b) if b.hub => Cmd::HubRestart,
-            _ => Cmd::BannerYes,
+        Hit::BannerYes => vm.banner.as_ref().map(|b| {
+            if b.key.app.is_none() {
+                Cmd::HubRestart
+            } else {
+                Cmd::BannerYes
+            }
         }),
-        Hit::BannerNo | Hit::BannerClose => Some(match &vm.banner {
-            Some(b) if b.hub => Cmd::HubLater,
-            _ => Cmd::BannerNo,
+        Hit::BannerNo | Hit::BannerClose => vm.banner.as_ref().map(|b| {
+            if b.key.app.is_none() {
+                Cmd::HubLater
+            } else {
+                Cmd::BannerNo
+            }
         }),
         Hit::Drag
         | Hit::Min
@@ -629,7 +675,7 @@ pub fn key_command(
             Key::Char(c) if !ctrl && !c.is_control() => Some(Cmd::FilterChar(c)),
             Key::Char('f') => Some(Cmd::FocusFilter),
             Key::Backspace => Some(Cmd::FilterBack),
-            Key::Esc => Some(Cmd::Esc),
+            Key::Esc => Some(Cmd::FilterEscape),
             Key::Enter | Key::Down | Key::Tab => Some(Cmd::FilterBlur),
             Key::F5 => Some(Cmd::CheckNow),
             _ => None,
@@ -663,6 +709,47 @@ pub fn notes_nav(key: Key) -> Option<crate::changelog::Nav> {
         Key::PageDown | Key::Char(' ') => Some(Nav::PageDown),
         Key::Home => Some(Nav::Home),
         Key::End => Some(Nav::End),
+        _ => None,
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum NotesKey {
+    Scroll(crate::changelog::Nav),
+    Focus(Hit),
+    Run(Cmd),
+}
+
+/// Notes owns every key while open. A key not mapped here does nothing, never a list command.
+pub fn notes_key(key: Key, shift: bool, repeat: bool, retry: bool, focus: Hit) -> Option<NotesKey> {
+    if let Some(nav) = notes_nav(key) {
+        return Some(NotesKey::Scroll(nav));
+    }
+    if repeat && key != Key::Tab {
+        return None;
+    }
+    let controls: &[Hit] = if retry {
+        &[Hit::NotesBack, Hit::NotesRetry, Hit::NotesPage]
+    } else {
+        &[Hit::NotesBack, Hit::NotesPage]
+    };
+    match key {
+        Key::Esc | Key::Backspace => Some(NotesKey::Run(Cmd::NotesClose)),
+        Key::Tab => {
+            let n = controls.len();
+            let next = match controls.iter().position(|&hit| hit == focus) {
+                Some(i) if shift => (i + n - 1) % n,
+                Some(i) => (i + 1) % n,
+                None if shift => n - 1,
+                None => 0,
+            };
+            Some(NotesKey::Focus(controls[next]))
+        }
+        Key::Enter if controls.contains(&focus) => Some(NotesKey::Run(match focus {
+            Hit::NotesBack => Cmd::NotesClose,
+            Hit::NotesRetry => Cmd::NotesRetry,
+            _ => Cmd::NotesPage,
+        })),
         _ => None,
     }
 }
@@ -741,6 +828,7 @@ pub struct Engine {
     /// Apps the user said yes to closing (the offer bar), so the install may close them.
     consented: Vec<&'static str>,
     banner: Option<&'static str>,
+    offer_serial: u64,
     pending_close: Vec<&'static str>,
     queue: VecDeque<(&'static str, JobKind)>,
     active: Option<Active>,
@@ -778,6 +866,7 @@ struct NotesOpen {
 struct Own {
     exe: Option<PathBuf>,
     status: Status,
+    offer_serial: u64,
     /// "Later" was pressed on the banner for the version that is ready.
     dismissed: bool,
     /// "Restart now" was pressed while an install ran: swap when the installs are done.
@@ -794,6 +883,7 @@ impl Own {
         Own {
             exe,
             status: Status::None,
+            offer_serial: 0,
             dismissed: false,
             when_idle: false,
             restart: None,
@@ -873,6 +963,7 @@ impl Engine {
             hover: None,
             pointer: Pointer::default(),
             banner: None,
+            offer_serial: 0,
             pending_close: Vec::new(),
             queue: VecDeque::new(),
             active: None,
@@ -917,15 +1008,16 @@ impl Engine {
             slots: Vec::new(),
             view: vm.view,
             sel: vm.sel,
+            filter: vm.filter.clone(),
+            filter_focus: vm.filter_focus,
             fixed: Some(vm),
-            filter: String::new(),
-            filter_focus: false,
             sel_touched: false,
             running_busy: false,
             consented: Vec::new(),
             hover: None,
             pointer: Pointer::default(),
             banner: None,
+            offer_serial: 0,
             pending_close: Vec::new(),
             queue: VecDeque::new(),
             active: None,
@@ -1000,6 +1092,18 @@ impl Engine {
         self.filter_focus
     }
 
+    pub fn filter(&self) -> &str {
+        &self.filter
+    }
+
+    pub fn notes_input(&self) -> Option<bool> {
+        self.notes
+            .as_ref()
+            .map(|n| &n.state)
+            .or_else(|| self.fixed.as_ref()?.notes.as_ref().map(|n| &n.state))
+            .map(|state| matches!(state, NotesState::Failed(_)))
+    }
+
     pub fn view(&self) -> View {
         self.view
     }
@@ -1023,12 +1127,14 @@ impl Engine {
 
     /// The window's picture at `now` (Unix seconds).
     pub fn vm(&self, now: u64) -> Vm {
-        let apps: Vec<AppVm> = self
-            .all_apps(now)
-            .into_iter()
-            .filter(|a| matches_filter(&self.filter, a))
-            .collect();
-        let updates = apps.iter().filter(|a| a.row == Row::Update).count();
+        let mut apps = self.all_apps(now);
+        let updates = self.fixed.as_ref().map_or_else(
+            || apps.iter().filter(|a| update_eligible(&a.row)).count(),
+            |v| v.updates,
+        );
+        if !self.filter.is_empty() {
+            apps.retain(|a| matches_filter(&self.filter, a));
+        }
         let sel = self.sel.min(apps.len().saturating_sub(1));
         let busy_n = self.queue.len() + usize::from(self.active.is_some());
         let busy = (busy_n > 0).then(|| match (busy_n, &self.active) {
@@ -1044,17 +1150,35 @@ impl Engine {
         let banner = self
             .banner
             .and_then(|id| {
-                let name = CATALOG.iter().find(|c| c.id == id)?.name;
-                Some(close_question(name))
+                let slot = self.slot(id)?;
+                let version = match &slot.latest {
+                    Latest::Found(m) => m.version.to_string(),
+                    _ => String::new(),
+                };
+                Some(close_question(
+                    slot.app.name,
+                    OfferKey {
+                        app: Some(id),
+                        version,
+                        serial: self.offer_serial,
+                    },
+                ))
             })
             // Hub's own update, once it is downloaded: after an app's question, never over it.
             .or_else(|| {
-                self.hub_banner_shown().then(|| Banner {
+                let Status::Ready(staged) = &self.own.status else {
+                    return None;
+                };
+                (!self.own.dismissed).then(|| Banner {
+                    key: OfferKey {
+                        app: None,
+                        version: staged.version.to_string(),
+                        serial: self.own.offer_serial,
+                    },
                     text: self.own.status.label(),
                     yes: "Restart now".into(),
                     no: "Later".into(),
                     warn: false,
-                    hub: true,
                 })
             });
         let checked = if self.checking {
@@ -1085,7 +1209,11 @@ impl Engine {
                 Status::Ready(s) => format!("{} ({} ready)", env!("CARGO_PKG_VERSION"), s.version),
                 _ => env!("CARGO_PKG_VERSION").to_string(),
             },
-            settings: None,
+            settings: self.fixed.as_ref().and_then(|v| v.settings.clone()),
+            demo_menu: self.fixed.as_ref().is_some_and(|v| v.demo_menu),
+            demo_dropdown: self.fixed.as_ref().is_some_and(|v| v.demo_dropdown),
+            maximized: self.fixed.as_ref().is_some_and(|v| v.maximized),
+            notes_focus: self.fixed.as_ref().map_or(Hit::None, |v| v.notes_focus),
             notes: self
                 .notes
                 .as_ref()
@@ -1111,11 +1239,6 @@ impl Engine {
         let changed = self.pointer.hot != hot;
         self.pointer.hot = hot;
         changed
-    }
-
-    /// What the pointer is over and holds down.
-    pub fn pointer(&self) -> Pointer {
-        self.pointer
     }
 
     /// The control the left button went down on (`Hit::None` once it is up): true when the
@@ -1159,6 +1282,31 @@ impl Engine {
         }
         v.push((MenuItem::GitHub, "GitHub", true));
         v
+    }
+
+    /// The choices currently available on this tile, also used to validate pointer release.
+    pub fn menu_items_for(&self, id: &str, view: View) -> Vec<(MenuItem, &'static str, bool)> {
+        let items = self.menu_items(id);
+        if view != View::Small {
+            return items;
+        }
+        if let Some(slot) = self.slot(id) {
+            small_menu_items(&app_vm(slot, check::now()), items)
+        } else if let Some(app) = self
+            .fixed
+            .as_ref()
+            .and_then(|vm| vm.apps.iter().find(|a| a.id == id))
+        {
+            small_menu_items(app, items)
+        } else {
+            items
+        }
+    }
+
+    pub fn menu_choice_enabled(&self, id: &str, view: View, item: MenuItem) -> bool {
+        self.menu_items_for(id, view)
+            .iter()
+            .any(|&(choice, _, enabled)| choice == item && enabled)
     }
 
     fn can_roll_back(&self, slot: &Slot) -> bool {
@@ -1229,7 +1377,7 @@ impl Engine {
         let now = check::now();
         match cmd {
             Cmd::Select(i) => {
-                let changed = self.sel != i;
+                let changed = self.sel != i || self.filter_focus;
                 self.sel = i;
                 self.sel_touched = true;
                 self.filter_focus = false;
@@ -1274,11 +1422,28 @@ impl Engine {
                 self.sel_touched = false;
                 had
             }
+            Cmd::FilterClear => {
+                if self.filter.is_empty() {
+                    return false;
+                }
+                self.filter.clear();
+                self.sel = 0;
+                self.sel_touched = false;
+                true
+            }
             Cmd::FilterBlur => {
                 let changed = self.filter_focus;
                 self.filter_focus = false;
                 changed
             }
+            Cmd::FilterEscape if self.filter_focus => {
+                if self.filter.is_empty() {
+                    self.apply(Cmd::FilterBlur)
+                } else {
+                    self.apply(Cmd::FilterClear)
+                }
+            }
+            Cmd::FilterEscape => false,
             Cmd::Esc => {
                 if self.notes.is_some() {
                     // Back to the list: the selection is where it was.
@@ -1294,10 +1459,7 @@ impl Engine {
                     self.own.dismissed = true;
                     true
                 } else if !self.filter.is_empty() {
-                    self.filter.clear();
-                    self.sel = 0;
-                    self.sel_touched = false;
-                    true
+                    self.apply(Cmd::FilterClear)
                 } else if self.filter_focus {
                     self.filter_focus = false;
                     true
@@ -1333,7 +1495,7 @@ impl Engine {
                 // Is it open now? Not what was cached a while ago.
                 self.refresh_one(id);
                 if self.slot(id).is_some_and(|s| s.running) {
-                    self.banner = Some(id);
+                    self.ask_to_close(id);
                     true
                 } else {
                     self.enqueue(id, JobKind::Install)
@@ -1464,14 +1626,14 @@ impl Engine {
         self.active.as_ref().is_some_and(|a| a.id == id) || self.queue.iter().any(|(q, _)| *q == id)
     }
 
-    fn update_all(&mut self, _now: u64) -> bool {
+    fn update_all(&mut self, now: u64) -> bool {
         // Every app with an update goes into the queue, in the window's order; one that is open
         // is asked about first (the offer bar), never closed without asking.
         self.refresh_running();
         let mut running = Vec::new();
         let mut todo = Vec::new();
         for s in &self.slots {
-            if s.phase == Phase::Idle && row_of(s, 0) == Row::Update {
+            if update_eligible(&row_of(s, now)) {
                 if s.running {
                     running.push(s.app.id);
                 } else {
@@ -1497,8 +1659,14 @@ impl Engine {
             && self.banner.is_none()
             && !self.pending_close.is_empty()
         {
-            self.banner = Some(self.pending_close.remove(0));
+            let id = self.pending_close.remove(0);
+            self.ask_to_close(id);
         }
+    }
+
+    fn ask_to_close(&mut self, id: &'static str) {
+        self.offer_serial = self.offer_serial.wrapping_add(1);
+        self.banner = Some(id);
     }
 
     fn enqueue(&mut self, id: &'static str, kind: JobKind) -> bool {
@@ -1698,6 +1866,7 @@ impl Engine {
             file,
             state,
         });
+        self.filter_focus = false;
         self.fetch_notes();
         true
     }
@@ -1791,6 +1960,16 @@ impl Engine {
         let app = slot.app;
         match item {
             MenuItem::Open => self.open(id),
+            MenuItem::Action(act) => {
+                // A check or worker can change the row while the menu is open.
+                if !crate::view::row_actions(&app_vm(slot, check::now()))
+                    .iter()
+                    .any(|b| b.act == act)
+                {
+                    return false;
+                }
+                self.apply(act_cmd(id, act))
+            }
             MenuItem::ShowInFolder => {
                 if let Some(i) = &slot.installed {
                     self.shell.reveal(&i.exe);
@@ -1913,6 +2092,7 @@ impl Engine {
             // what is wrong in its own words.
             HubEvent::Checked(Err(_)) => false,
             HubEvent::Staged(Ok(s)) => {
+                self.own.offer_serial = self.own.offer_serial.wrapping_add(1);
                 if !matches!(&self.own.status, Status::Ready(r) if r.version == s.version) {
                     self.own.dismissed = false;
                 }
@@ -2196,7 +2376,7 @@ impl Engine {
     pub fn handle(&mut self, ev: Event) -> bool {
         let now = check::now();
         match ev {
-            Event::Raise | Event::Tray(_) => false,
+            Event::Raise | Event::MotionChanged | Event::Tray(_) => false,
             Event::Hub(h) => self.handle_hub(h),
             Event::Notes {
                 id,

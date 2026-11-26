@@ -36,7 +36,6 @@ pub struct Style {
     pub bold: bool,
     pub italic: bool,
     pub code: bool,
-    pub link: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -391,7 +390,8 @@ pub fn inline(s: &str) -> Vec<Span> {
                 i += n;
             }
             '[' | '!' => {
-                // `[text](url)` and `![alt](url)`: the text, as a link.
+                // `[text](url)` and `![alt](url)`: keep the label and its surrounding style,
+                // but not the URL or a link look. Nothing in the notes body is clickable.
                 let start = if c == '!' && cs.get(i + 1) == Some(&'[') {
                     i + 1
                 } else if c == '[' {
@@ -418,13 +418,7 @@ pub fn inline(s: &str) -> Vec<Span> {
                 });
                 match (close, end) {
                     (Some(p), Some(q)) if p > start + 1 && p - start <= 300 => {
-                        emit(&mut out, &mut buf, cur);
-                        let text: String = cs[start + 1..p].iter().collect();
-                        let style = Style { link: true, ..cur };
-                        match out.last_mut() {
-                            Some(l) if l.style == style => l.text.push_str(&text),
-                            _ => out.push(Span { text, style }),
-                        }
+                        buf.extend(cs[start + 1..p].iter());
                         i = q + 1;
                     }
                     _ => {
@@ -462,7 +456,6 @@ pub fn inline(s: &str) -> Vec<Span> {
 pub enum Tone {
     Text,
     Muted,
-    Accent,
     /// Italic: the text colour pulled towards the muted one (the shared fonts have no italic).
     Soft,
 }
@@ -562,11 +555,7 @@ struct Placed {
 }
 
 fn tone_of(style: Style) -> Tone {
-    if style.code {
-        Tone::Text
-    } else if style.link {
-        Tone::Accent
-    } else if style.italic {
+    if !style.code && style.italic {
         Tone::Soft
     } else {
         Tone::Text
@@ -929,7 +918,6 @@ fn tone_color(pal: &Palette, t: Tone) -> Rgb {
     match t {
         Tone::Text => pal.text,
         Tone::Muted => pal.muted,
-        Tone::Accent => blue(pal),
         Tone::Soft => mix(pal.text, pal.muted, 0.45),
     }
 }
@@ -1034,6 +1022,7 @@ pub fn version_line(n: &NotesVm) -> String {
 
 /// The notes page in the content area `r`. `scroll` is clamped here; the Layout gets how far the
 /// text can scroll, and the page's hits.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_page(
     p: &mut Painter,
     pal: &Palette,
@@ -1042,7 +1031,9 @@ pub fn draw_page(
     scroll: f32,
     ptr: &Pointer,
     lay: &mut Layout,
+    anim: &mut mdshared_ui::anim::Animator,
 ) {
+    let look = |anim: &mut _, hit| crate::motion::button(anim, hit, *ptr, hit);
     let px = p.px().max(1.0);
     p.fill(r, pal.page);
     let (head, body, foot) = parts(r);
@@ -1051,7 +1042,7 @@ pub fn draw_page(
     p.fill(head, pal.pane);
     p.fill(Rect::new(head.x, head.bottom() - px, head.w, px), pal.line);
     let back = Rect::new(head.x + 10.0, head.y + (head.h - 32.0) / 2.0, 32.0, 32.0);
-    ui::quiet_fill(p, pal, back, 6.0, ptr.look(Hit::NotesBack));
+    ui::quiet_fill(p, pal, back, 6.0, look(anim, Hit::NotesBack));
     p.icon(BACK_ICON, 15.0, back.cx(), back.cy(), pal.text);
     lay.hits.push((back, Hit::NotesBack));
     let tx = back.right() + 12.0;
@@ -1077,13 +1068,20 @@ pub fn draw_page(
     );
     p.restore(old);
 
-    // The footer: the installed version line, and the release page.
+    // The footer: the installed version line, and the button for the GitHub release.
     p.fill(foot, pal.bar);
     p.fill(Rect::new(foot.x, foot.y, foot.w, px), pal.line);
     let fy = foot.cy();
     let old = p.clip(foot);
-    let look = ptr.look(Hit::NotesPage);
-    let page = ui::sbtn_r(p, pal, foot.right() - 14.0, fy, "Release page", false, look);
+    let page = ui::sbtn_r(
+        p,
+        pal,
+        foot.right() - 14.0,
+        fy,
+        "View on GitHub",
+        false,
+        look(anim, Hit::NotesPage),
+    );
     lay.hits.push((page, Hit::NotesPage));
     let mut line = version_line(n);
     if !n.date.is_empty() {
@@ -1161,14 +1159,35 @@ pub fn draw_page(
     }
     if matches!(n.state, NotesState::Failed(_)) {
         let by = ex_top + extra_h - 28.0 + 14.0;
-        let b = ui::sbtn(p, pal, cx, by, "Try again", true, ptr.look(Hit::NotesRetry));
+        let b = ui::sbtn(
+            p,
+            pal,
+            cx,
+            by,
+            "Try again",
+            true,
+            look(anim, Hit::NotesRetry),
+        );
         if let Some(v) = ui::intersect(b, body) {
             lay.hits.push((v, Hit::NotesRetry));
         }
     }
     p.restore(old);
-    if let Some((track, thumb)) = scroll::scrollbar(body, content, body.h, scroll) {
-        scroll::draw_scrollbar(p, pal, track, thumb, n.bar_active);
+    // Keep the painted thumb and its hit outside the window's resize band, even at rest.
+    let bar_area = Rect {
+        w: (body.w - mdshared_ui::window::EDGE).max(0.0),
+        ..body
+    };
+    if let Some((track, thumb)) = scroll::scrollbar(bar_area, content, body.h, scroll) {
+        scroll::draw_scrollbar_animated(
+            p,
+            pal,
+            anim,
+            "notes-scrollbar",
+            track,
+            thumb,
+            n.bar_active,
+        );
         // The thumb after the track: it is the front-most of the two.
         lay.hits.push((track, Hit::NotesTrack));
         lay.hits.push((thumb, Hit::NotesThumb));
@@ -1266,9 +1285,9 @@ pub fn bar_drag(lay: &Layout, grab: f32, y: f32) -> Option<f32> {
     })
 }
 
-/// The pointer at (`x`, `y`) is on the scrollbar (track or thumb).
-pub fn on_bar(lay: &Layout, x: f32, y: f32) -> bool {
-    matches!(lay.at(x, y), Hit::NotesTrack | Hit::NotesThumb)
+/// Is the resolved pointer target on the scrollbar (track or thumb)?
+pub fn bar_hit(hit: Hit) -> bool {
+    matches!(hit, Hit::NotesTrack | Hit::NotesThumb)
 }
 
 #[cfg(test)]

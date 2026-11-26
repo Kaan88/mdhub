@@ -3,16 +3,16 @@ resolver = "3"
 members = ["crates/hub-core", "bins/hub"]
 
 [workspace.package]
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 publish = false
 
-# The shared crates, pinned by commit as mdedit pins them (docs/CODE.md in mdedit).
+# The shared crates, moved together (docs/CODE.md).
 [workspace.dependencies]
-mdshared-app = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "b4b21824bd72c2e47574291c32800f2b6b6a4385" }
-mdshared-text = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "b4b21824bd72c2e47574291c32800f2b6b6a4385" }
-mdshared-ui = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "b4b21824bd72c2e47574291c32800f2b6b6a4385" }
-mdshared-fetch = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "b4b21824bd72c2e47574291c32800f2b6b6a4385" }
+mdshared-app = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "5665039d08d1e97964685ac3ed6e050b69bac467" }
+mdshared-text = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "5665039d08d1e97964685ac3ed6e050b69bac467" }
+mdshared-ui = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "5665039d08d1e97964685ac3ed6e050b69bac467" }
+mdshared-fetch = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "5665039d08d1e97964685ac3ed6e050b69bac467" }
 
 [profile.release]
 opt-level = 3

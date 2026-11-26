@@ -509,6 +509,84 @@ fn the_filter_box_is_there_from_900_and_the_view_switch_always() {
 }
 
 #[test]
+fn the_filter_opener_field_and_clear_action_fit_without_overlapping_commands() {
+    let hits = |vm: &Vm, w| lay_of(vm, w, 360);
+    let vm = demo::build("main", View::List).unwrap();
+    let compact = hits(&vm, 520);
+    assert_eq!(count(&compact, Hit::FilterOpen), 1);
+    assert_eq!(count(&compact, Hit::FilterClear), 0);
+    let results = demo::build("filter-results", View::List).unwrap();
+    for (name, is_focused) in [
+        ("filter-results", false),
+        ("filter-edit", true),
+        ("filter-no-matches", false),
+    ] {
+        let vm = demo::build(name, View::List).unwrap();
+        for w in [520, 640, 899, 900, 1280] {
+            let lay = hits(&vm, w);
+            let expected = if is_focused || w >= 900 {
+                Hit::Filter
+            } else {
+                Hit::FilterOpen
+            };
+            let clear = rect_of(&lay, Hit::FilterClear);
+            let field = rect_of(&lay, expected);
+            assert_eq!(lay.at(clear.cx(), clear.cy()), Hit::FilterClear);
+            assert_eq!(lay.at(field.cx(), field.cy()), expected);
+            assert!(!overlaps(field, clear));
+            if is_focused && count(&lay, Hit::UpdateAll) == 0 {
+                assert_eq!(
+                    field.x, 8.0,
+                    "the focused field uses the space given up by the left group"
+                );
+            }
+            for (rect, hit) in &lay.hits {
+                if matches!(
+                    hit,
+                    Hit::CheckNow | Hit::UpdateAll | Hit::ViewSwitch(_) | Hit::Settings
+                ) {
+                    assert!(
+                        !overlaps(field, *rect) && !overlaps(clear, *rect),
+                        "{w} {name} {hit:?}"
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(count(&hits(&results, 520), Hit::UpdateAll), 1);
+}
+
+#[test]
+fn no_filter_match_paints_a_different_explanation_from_a_plain_empty_list() {
+    let mut vm = demo::build("filter-no-matches", View::List).unwrap();
+    let mut gfx = Gfx::new();
+    let (_, filtered) = draw_at(&mut gfx, &LIGHT, &vm, 520, 360, 0.0);
+    vm.filter.clear();
+    let (_, unfiltered) = draw_at(&mut gfx, &LIGHT, &vm, 520, 360, 0.0);
+    let empty_text = Rect::new(0.0, 84.0, 520.0, 200.0);
+    assert_ne!(
+        region(&filtered, empty_text),
+        region(&unfiltered, empty_text)
+    );
+}
+
+#[test]
+fn the_grid_summary_does_not_use_the_catalog_wide_toolbar_count() {
+    let mut gfx = Gfx::new();
+    let mut vm = demo::build("filter-results", View::Large).unwrap();
+    let (_, catalog_count) = draw_at(&mut gfx, &LIGHT, &vm, 860, 660, 0.0);
+    vm.updates = 1;
+    let (_, visible_count) = draw_at(&mut gfx, &LIGHT, &vm, 860, 660, 0.0);
+    let summary = Rect::new(0.0, 84.0, 860.0, view::HEAD_H);
+    assert_eq!(
+        region(&catalog_count, summary),
+        region(&visible_count, summary)
+    );
+    let tools = Rect::new(0.0, 40.0, 200.0, 44.0);
+    assert_ne!(region(&catalog_count, tools), region(&visible_count, tools));
+}
+
+#[test]
 fn the_offer_bar_has_yes_no_and_a_close_that_means_no() {
     let vm = demo::build("banner", View::List).unwrap();
     let l = lay_of(&vm, 1280, 800);
@@ -540,16 +618,15 @@ fn the_offer_bar_has_yes_no_and_a_close_that_means_no() {
 }
 
 #[test]
-fn every_row_has_a_menu_in_the_list_and_the_large_grid_but_not_the_small() {
-    for (v, want) in [
-        (View::List, true),
-        (View::Large, true),
-        (View::Small, false),
-    ] {
+fn every_row_has_one_hittable_menu_in_each_view() {
+    for v in VIEWS {
         let vm = demo::build("main", v).unwrap();
         let l = lay_of(&vm, 1280, 800);
         for i in 0..vm.apps.len() {
-            assert_eq!(count(&l, Hit::Menu(i)), usize::from(want), "{v:?} app {i}");
+            let hit = Hit::Menu(i);
+            assert_eq!(count(&l, hit), 1, "{v:?} app {i}");
+            let (r, _) = l.hits.iter().find(|(_, h)| *h == hit).unwrap();
+            assert_eq!(l.at(r.cx(), r.cy()), hit, "{v:?} app {i}");
         }
     }
 }
@@ -644,10 +721,24 @@ fn grid_tiles_are_the_size_the_plan_says() {
 
 #[test]
 fn the_narrow_tier_drops_installed_and_latest_and_the_pane_needs_a_selection() {
-    let c = view::cols(639.0);
-    assert!(c.installed == 0.0 && c.latest == 0.0 && c.released == 0.0 && c.size == 0.0);
-    let c = view::cols(640.0);
+    for w in [520.0, 639.0, 640.0, 701.0] {
+        let c = view::cols(w);
+        assert!(c.installed == 0.0 && c.latest == 0.0 && c.released == 0.0 && c.size == 0.0);
+        assert!(c.name_w(w) >= 110.0);
+    }
+    let c = view::cols(702.0);
     assert!(c.installed > 0.0 && c.latest > 0.0 && c.released == 0.0);
+    assert_eq!(c.name_w(702.0), 110.0);
+    for w in [520, 640, 702, 999, 1000, 1280] {
+        let c = view::cols(w as f32);
+        let vm = demo::build("main", View::List).unwrap();
+        let lay = lay_of(&vm, w, 660);
+        for (r, hit) in lay.hits {
+            if matches!(hit, Hit::Action(..) | Hit::Menu(_)) {
+                assert!(r.x >= w as f32 - c.actions && r.right() <= w as f32);
+            }
+        }
+    }
     assert_eq!(PANE_MIN, 150.0, "the plan: a pane under 150 px is left out");
     let mut vm = demo::build("main", View::List).unwrap();
     let room = 40.0 + 44.0 + 26.0 + view::content_height(&vm, 1280.0) + 400.0;
@@ -995,25 +1086,86 @@ fn a_held_button_looks_pressed_only_while_the_pointer_is_on_it() {
 }
 
 #[test]
-fn the_close_question_shows_the_warning_sign_and_hubs_own_bar_does_not() {
-    let q = crate::glue::close_question("Inbound");
-    assert!(q.warn, "closing an open app is a warning");
-    assert!(!q.hub);
-    assert_eq!(q.text, "Inbound is open: close it and update");
-    // The warning sign is what is drawn: the bar differs from the same bar marked as no warning,
-    // and only at its icon.
+fn the_close_question_uses_the_warning_palette_without_tinting_hubs_restart_bar() {
+    let vm = demo::build("close-question", View::List).unwrap();
+    let q = vm.banner.as_ref().unwrap();
+    assert!(q.warn && q.key.app == Some("inbound"));
+    assert_eq!(q.text, "Updating Inbound will close it.");
+    assert_eq!((&*q.yes, &*q.no), ("Close and update", "Not now"));
     let mut gfx = Gfx::new();
-    let mut vm = demo::build("close-question", View::List).unwrap();
-    let (_, warn) = draw_at(&mut gfx, &LIGHT, &vm, 1280, 800, 0.0);
-    vm.banner.as_mut().unwrap().warn = false;
-    let (_, plain) = draw_at(&mut gfx, &LIGHT, &vm, 1280, 800, 0.0);
-    let icon = Rect::new(12.0, 84.0 + 7.0, 20.0, 20.0);
-    assert_ne!(region(&warn, icon), region(&plain, icon));
-    assert_eq!(
-        region(&warn, Rect::new(40.0, 84.0, 1200.0, 34.0)),
-        region(&plain, Rect::new(40.0, 84.0, 1200.0, 34.0))
-    );
-    // Hub's own "Restart now" stays an ordinary offer.
     let own = demo::build("banner", View::List).unwrap();
-    assert!(!own.banner.unwrap().warn);
+    assert!(!own.banner.as_ref().unwrap().warn);
+    let bgr = |[r, g, b]: [u8; 3]| [b, g, r];
+    for pal in [LIGHT, DARK] {
+        let (_, warn) = draw_at(&mut gfx, &pal, &vm, 1280, 800, 0.0);
+        let (_, plain) = draw_at(&mut gfx, &pal, &own, 1280, 800, 0.0);
+        let ground = Rect::new(2.0, 90.0, 1.0, 1.0);
+        let icon = Rect::new(12.0, 91.0, 20.0, 20.0);
+        assert_eq!(region(&warn, ground), bgr(pal.warn_bg));
+        assert_eq!(region(&plain, ground), bgr(pal.bar));
+        assert!(
+            region(&warn, icon)
+                .as_chunks::<3>()
+                .0
+                .contains(&bgr(pal.warn))
+        );
+    }
+}
+
+#[test]
+fn caption_switches_only_the_maximize_button_to_restore() {
+    let normal = demo::build("main", View::List).unwrap();
+    let maximized = demo::build("maximized-chrome", View::List).unwrap();
+    let mut gfx = Gfx::new();
+    for pal in [LIGHT, DARK] {
+        let (a, before) = draw_at(&mut gfx, &pal, &normal, 860, 660, 0.0);
+        let (b, after) = draw_at(&mut gfx, &pal, &maximized, 860, 660, 0.0);
+        assert_eq!(a.hits, b.hits);
+        let max = rect_of(&a, Hit::Max);
+        assert_ne!(region(&before, max), region(&after, max));
+        for h in [Hit::Min, Hit::Close] {
+            let r = rect_of(&a, h);
+            assert_eq!(region(&before, r), region(&after, r));
+        }
+    }
+}
+
+#[test]
+fn notes_keyboard_focus_is_painted_on_the_focused_control() {
+    let mut gfx = Gfx::new();
+    let vm = demo::build("notes-failed", View::List).unwrap();
+    let controls = [Hit::NotesBack, Hit::NotesRetry, Hit::NotesPage];
+    for pal in [LIGHT, DARK] {
+        let (lay, baseline) = draw_at(&mut gfx, &pal, &vm, 860, 660, 0.0);
+        for focus in controls {
+            let mut vm = vm.clone();
+            vm.notes_focus = focus;
+            let (_, focused) = draw_at(&mut gfx, &pal, &vm, 860, 660, 0.0);
+            for hit in controls {
+                let r = rect_of(&lay, hit);
+                let r = Rect::new(r.x - 4.0, r.y - 4.0, r.w + 8.0, r.h + 8.0);
+                assert_eq!(region(&baseline, r) != region(&focused, r), hit == focus);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_long_footer_notice_does_not_paint_under_the_globe_or_in_the_version_slot() {
+    use mdshared_ui::gfx::Face;
+    let mut gfx = Gfx::new();
+    let mut vm = demo::build("narrow-long-notice", View::List).unwrap();
+    let (_, long) = draw_at(&mut gfx, &LIGHT, &vm, 520, 360, 0.0);
+    vm.checked.clear();
+    let (_, mut short) = draw_at(&mut gfx, &LIGHT, &vm, 520, 360, 0.0);
+    let p = &mut Painter::new(&mut short, &mut gfx, 1.0);
+    let version = p.measure(Face::Ui, 12.0, &format!("Hub {}", vm.hub_version));
+    let left = Rect::new(0.0, 334.0, 30.0, 26.0);
+    let right = Rect::new((506.0 - version).ceil(), 334.0, version, 26.0);
+    assert_eq!(region(&long, left), region(&short, left));
+    assert_eq!(region(&long, right), region(&short, right));
+    assert_ne!(
+        region(&long, Rect::new(30.0, 334.0, 250.0, 26.0)),
+        region(&short, Rect::new(30.0, 334.0, 250.0, 26.0))
+    );
 }

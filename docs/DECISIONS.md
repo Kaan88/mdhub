@@ -318,3 +318,67 @@ fallback). The app asks before quitting with live tabs. If it hides to the tray,
 The 128 px app icon is from `assets/logo-256.png`; the fallback is Claude clay and `code`.
 Hub's own icon is unchanged (D-024). No release or sample yet; no legacy manifest or self-updater.
 Would change: an installer path or AppId change, or an app-provided safe quit request.
+
+## D-036 Pin shared at 5665039 and adopt its event-driven motion (2026-11-26)
+Moves all four crates together from `b4b21824` to `5665039d08d1e97964685ac3ed6e050b69bac467`,
+superseding D-006's pin but not its no-new-direct-dependency rule. The new lock entries are
+`libloading 0.9.1` (the shared fetcher on non-Windows), `zune-jpeg` and `zune-core` (shared text).
+Refines D-032: hover fades using shared motion, while pressed looks and action state remain
+immediate. Menus and settings use shared presence; notes and views use a content-region
+`PageTransition`; progress uses Fluent movement. Use the single-page form of D-034, not a new
+settings navigation. The form's private dropdown cannot leave visibly on its own, so Hub keeps
+the shared menu in a presence slot and hands its selection back to the form.
+Refines D-014: the loop still sleeps; an animator deadline joins the same one-shot wake as checks
+and close. Reduced motion uses the system setting; shots force settled endpoints. No repeating
+animation and no change to the tray's system menu or balloons. Would change: shared exposing
+dropdown presence through `Form`, or the owner asking for different motion.
+
+## D-037 Hub remembers its normal window rectangle, and the default is 860×660
+Refines D-017 (Hub's own files) and D-018 (destroy the window when closing to the tray).
+`settings.ini` holds `[window]` `placement=x y width height maximized`, with a signed physical
+desktop origin, logical client width and height, and `0`/`1` for maximized. A different DPI can
+then change how many device pixels the client takes without changing its logical size. Moves and
+resizes update memory; close-to-tray and normal exit save under the existing store lock. A minimized
+window saves its last visible state, not an iconic rectangle. Nothing polls.
+Restore needs a reachable part of the draggable title bar in a current monitor's work area; if
+none fits, use the unmaximized default centered on the primary work area. A restored size is
+bounded by the destination work area and the existing 520×360 logical minimum. `--size` ignores
+and does not replace saved placement; demos and shots do not use it. The extra 60 logical pixels
+let the seven-app list show its details pane above the status bar; no padding change was needed.
+Would change: evidence that a visible title bar is not enough to recover the window after a
+display change, or a catalog large enough to need a different default layout.
+
+## D-038 A pointer button activates on release over the same semantic target
+Refines D-032/D-036: press lights the control; moving off it and releasing cancels. Dragging the
+title, resizing and scrollbar track/thumb gestures still start on press. Row actions are keyed by
+app ID and action, and offer controls by owner, release version and issuance, not by a row index
+or the painted Yes slot. Resolve the release against the painted frame and the live engine;
+focus loss or target replacement disarms it. This preserves D-025: a replacement prompt never
+inherits consent. Row menus likewise require the same choice at press and release. Would change:
+an explicit new gesture that needs to act on press.
+
+## D-039 Notes owns its keyboard; the app filter stays available at every window width
+Refines D-028: notes keeps the background selection, drops filter focus and consumes keys before
+the hidden app list. Tab and Shift+Tab reach Back, Try again when available, and the release page;
+Enter activates only the focused notes control. Ctrl+F or the compact search button opens the
+filter below 900 logical px; Clear stays visible while a query is active and Esc in the field
+clears before blurring. The filter affects what is shown, not the scope of Update all (D-021).
+Would change: a different keyboard focus model across the notes and list or a visible-only bulk
+action with a separate name.
+
+## D-040 The app-close offer uses Hub's warning colours
+Replaces D-032's deferred warning tint. Hub passes a local palette copy to the shared offer painter,
+using `warn_bg` for the background and `warn` for the muted ink on that offer only. The wording
+states the consequence (“Updating … will close it.”); the consent buttons and Hub's restart offer
+are unchanged. Would change: shared offering the same opt-in warning style.
+
+## D-041 Small tiles have an overflow menu; the notes thumb clears the resize band
+Keep the compact tile's size and text. Put an always-visible 28 px overflow target at the top
+left, away from the badge at the icon's top right. Left-align the shared popup at that target;
+list and large-grid menus stay right-aligned. Lead with available row actions, then the
+existing secondary entries (Open once). A picked row action is checked again and takes the
+ordinary command path; opening a menu is never consent to close an app. Would change: evidence
+that the target is hard to find or use at the minimum window size.
+
+The notes scrollbar is inset from the right resize band: the visible thumb takes a drag and
+the window edge still takes a resize. It uses the shared cursor state, not custom cursors.

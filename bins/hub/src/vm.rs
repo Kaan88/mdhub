@@ -4,7 +4,7 @@
 use hub_core::model::Row;
 use mdshared_ui::gfx::Rect;
 
-#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug, Hash)]
 pub enum View {
     #[default]
     List,
@@ -35,15 +35,22 @@ pub struct AppVm {
     pub details: Vec<(String, String)>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OfferKey {
+    /// None means Hub's own restart offer.
+    pub app: Option<&'static str>,
+    pub version: String,
+    /// A freshly issued offer is distinct even when its app and version are unchanged.
+    pub serial: u64,
+}
+
+#[derive(Clone, Debug)]
 pub struct Banner {
+    pub key: OfferKey,
     pub text: String,
     pub yes: String,
     pub no: String,
     pub warn: bool,
-    /// The bar is Hub's own ("Restart now"), not an app's question: a click on it is a
-    /// different command, so a second click of a double-click cannot land on the other bar.
-    pub hub: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -58,14 +65,21 @@ pub struct Vm {
     pub hub_version: String,
     /// Some(text) while an install runs: the bar shows Cancel and this text.
     pub busy: Option<String>,
-    /// How many rows have `Row::Update`.
+    /// How many apps are eligible for Update all, independent of the filter.
     pub updates: usize,
     /// Filter text of the apps filter box.
     pub filter: String,
     pub filter_focus: bool,
+    /// The caption draws Restore instead of Maximize. Offscreen defaults to false.
+    pub maximized: bool,
+    /// The notes control reached with Tab, if any.
+    pub notes_focus: Hit,
     /// A picture of the settings card over the window (`--demo settings-...`): its rows and the
     /// category shown. The real window keeps a form of its own, so this is None there.
     pub settings: Option<(Vec<mdshared_ui::settings::Row>, usize)>,
+    /// Settled overlay specimens; never supplied by a live engine.
+    pub demo_menu: bool,
+    pub demo_dropdown: bool,
     /// The release notes view: when it is Some, it takes the content area (the list and the pane
     /// are not drawn) until it is closed.
     pub notes: Option<NotesVm>,
@@ -142,7 +156,7 @@ pub struct NotesVm {
 }
 
 /// What a row or tile's button does.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Act {
     Open,
     Install,
@@ -153,7 +167,7 @@ pub enum Act {
 }
 
 /// What a point on the window is.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
 pub enum Hit {
     /// Title row empty space: drag the window.
     Drag,
@@ -164,7 +178,10 @@ pub enum Hit {
     CheckNow,
     CancelAll,
     ViewSwitch(View),
+    /// The compact search button opens the filter field.
+    FilterOpen,
     Filter,
+    FilterClear,
     /// The sliders button: the settings card. The shell's own, like the window buttons.
     Settings,
     /// The row's or tile's body.
@@ -183,13 +200,104 @@ pub enum Hit {
     NotesBack,
     /// The notes view's "Try again".
     NotesRetry,
-    /// The notes view's "GitHub": the release page in the browser.
+    /// The notes view's "View on GitHub": the release page in the browser.
     NotesPage,
     /// The notes view's scrollbar: its track (a click pages toward it) and its thumb (dragged).
     NotesTrack,
     NotesThumb,
     #[default]
     None,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AppControl {
+    Row,
+    Action(Act),
+    Menu,
+    Notes,
+}
+
+/// A click belongs to what was pressed, not to the row or button slot that drew it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Target {
+    Control(Hit),
+    App(&'static str, View, AppControl),
+    Offer(OfferKey, Hit),
+    Notes(&'static str, String, Hit),
+}
+
+impl Target {
+    pub fn at(hit: Hit, vm: &Vm) -> Option<Self> {
+        let app = |i: usize, control| {
+            let app = vm.apps.get(i)?;
+            (vm.notes.is_none()).then_some(Self::App(app.id, vm.view, control))
+        };
+        let command_bar = || vm.notes.is_none();
+        match hit {
+            Hit::Drag | Hit::NotesTrack | Hit::NotesThumb => None,
+            Hit::Row(i) => app(i, AppControl::Row),
+            Hit::Action(i, act)
+                if crate::view::row_actions(vm.apps.get(i)?)
+                    .iter()
+                    .any(|b| b.act == act) =>
+            {
+                app(i, AppControl::Action(act))
+            }
+            Hit::Menu(i) => app(i, AppControl::Menu),
+            Hit::Notes(i) if i == vm.sel && vm.apps.get(i)?.latest.is_some() => {
+                app(i, AppControl::Notes)
+            }
+            Hit::Action(..) | Hit::Notes(_) => None,
+            Hit::BannerYes | Hit::BannerNo | Hit::BannerClose => {
+                Some(Self::Offer(vm.banner.as_ref()?.key.clone(), hit))
+            }
+            Hit::NotesBack | Hit::NotesPage | Hit::NotesRetry => {
+                let notes = vm.notes.as_ref()?;
+                (hit != Hit::NotesRetry || matches!(notes.state, NotesState::Failed(_)))
+                    .then(|| Self::Notes(notes.id, notes.version.clone(), hit))
+            }
+            Hit::UpdateAll if !command_bar() || vm.updates == 0 || vm.busy.is_some() => None,
+            Hit::CheckNow
+                if !command_bar() || vm.checked.starts_with("Checking") || vm.busy.is_some() =>
+            {
+                None
+            }
+            Hit::CancelAll if !command_bar() || vm.busy.is_none() => None,
+            Hit::FilterClear if !command_bar() || vm.filter.is_empty() => None,
+            Hit::FilterOpen if vm.filter_focus => None,
+            Hit::Filter | Hit::FilterOpen | Hit::Settings | Hit::ViewSwitch(_)
+                if !command_bar() =>
+            {
+                None
+            }
+            Hit::None if !command_bar() || !vm.filter_focus => None,
+            _ => Some(Self::Control(hit)),
+        }
+    }
+
+    pub fn live_hit(&self, vm: &Vm) -> Option<Hit> {
+        let hit = match self {
+            Self::Control(hit) | Self::Offer(_, hit) | Self::Notes(_, _, hit) => *hit,
+            Self::App(id, _, control) => {
+                let i = vm.apps.iter().position(|a| a.id == *id)?;
+                match control {
+                    AppControl::Row => Hit::Row(i),
+                    AppControl::Action(act) => Hit::Action(i, *act),
+                    AppControl::Menu => Hit::Menu(i),
+                    AppControl::Notes => Hit::Notes(i),
+                }
+            }
+        };
+        (Self::at(hit, vm).as_ref() == Some(self)).then_some(hit)
+    }
+
+    /// Return the current hit only if the pointer is on the original target in the last frame
+    /// and that target still exists in the live model (a worker event can precede the next draw).
+    pub fn release(&self, hit: Hit, painted: &Vm, live: &Vm) -> Option<Hit> {
+        (self.live_hit(painted) == Some(hit))
+            .then(|| self.live_hit(live))
+            .flatten()
+    }
 }
 
 #[derive(Clone, Debug, Default)]

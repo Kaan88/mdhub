@@ -274,12 +274,11 @@ fn a_click_that_answers_an_app_banner_never_answers_hubs_restart_bar() {
     fx.check();
     // Hub's bar is showing, and its buttons are Hub's own commands.
     let vm = fx.vm();
-    assert!(vm.banner.as_ref().is_some_and(|b| b.hub));
+    assert!(vm.banner.as_ref().is_some_and(|b| b.key.app.is_none()));
     assert_eq!(command(Hit::BannerYes, &vm), Some(Cmd::HubRestart));
     assert_eq!(command(Hit::BannerNo, &vm), Some(Cmd::HubLater));
     assert_eq!(command(Hit::BannerClose, &vm), Some(Cmd::HubLater));
-    // The second click of a double-click on an app's "Close and update" arrives after that bar
-    // is gone and Hub's has taken its place: it answers nothing.
+    // An app-specific Yes or No that arrives after its offer has gone cannot act on Hub's offer.
     fx.cmd(Cmd::BannerYes);
     assert!(
         fx.eng.take_restart().is_none(),
@@ -290,9 +289,10 @@ fn a_click_that_answers_an_app_banner_never_answers_hubs_restart_bar() {
     fx.cmd(Cmd::BannerNo);
     assert!(fx.vm().banner.is_some(), "and does not dismiss it either");
     // An app's bar is the other command.
-    let app = crate::vm::Banner::default();
     let mut vm = fx.vm();
-    vm.banner = Some(app);
+    vm.banner = crate::demo::build("close-question", crate::vm::View::List)
+        .unwrap()
+        .banner;
     assert_eq!(command(Hit::BannerYes, &vm), Some(Cmd::BannerYes));
     assert_eq!(command(Hit::BannerNo, &vm), Some(Cmd::BannerNo));
     assert_eq!(command(Hit::BannerClose, &vm), Some(Cmd::BannerNo));
