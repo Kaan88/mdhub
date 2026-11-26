@@ -371,3 +371,14 @@ Replaces D-032's deferred warning tint. Hub passes a local palette copy to the s
 using `warn_bg` for the background and `warn` for the muted ink on that offer only. The wording
 states the consequence (“Updating … will close it.”); the consent buttons and Hub's restart offer
 are unchanged. Would change: shared offering the same opt-in warning style.
+
+## D-041 Small tiles have an overflow menu; the notes thumb clears the resize band
+Keep the compact tile's size and text. Put an always-visible 28 px overflow target at the top
+left, away from the badge at the icon's top right. Left-align the shared popup at that target;
+list and large-grid menus stay right-aligned. Lead with available row actions, then the
+existing secondary entries (Open once). A picked row action is checked again and takes the
+ordinary command path; opening a menu is never consent to close an app. Would change: evidence
+that the target is hard to find or use at the minimum window size.
+
+The notes scrollbar is inset from the right resize band: the visible thumb takes a drag and
+the window edge still takes a resize. It uses the shared cursor state, not custom cursors.

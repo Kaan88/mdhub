@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Renders Hub's screenshot set with --shot into the directory given as the only argument: every
-# demo state (bins/hub/src/demo.rs) x list / large / small x light / dark at standard or specimen sizes.
+# demo state (bins/hub/src/demo.rs) x applicable views x both themes x applicable sizes.
 # Run it twice into two directories and compare: every PNG must be byte-identical.
 #
 #   tests/shots.sh target/shots/a
@@ -21,10 +21,11 @@ exe="$t/release/hub.exe"
 [ -x "$exe" ] || exe="$t/release/hub"
 [ -x "$exe" ] || { echo "shots: no release build at $t/release (cargo build --release -p hub)" >&2; exit 1; }
 
-DEMOS="main first-run updating failed done noinfo running banner all claude-switch empty settings-general settings-updates settings-about settings-interval-menu row-menu notes notes-offer notes-loading notes-failed notes-nofile notes-long notes-bar-active notes-focus-back notes-focus-retry notes-focus-page hover-close hover-min hover-bar hover-primary pressed-primary hover-open hover-menu close-question close-question-yes close-question-no backdrop-mica backdrop-acrylic filter-results filter-edit filter-no-matches narrow-columns maximized-chrome narrow-long-notice"
+DEMOS="main first-run updating failed done noinfo running banner all claude-switch empty settings-general settings-updates settings-about settings-interval-menu row-menu small-install-menu long-versions notes notes-offer notes-loading notes-failed notes-nofile notes-long notes-bar-active notes-focus-back notes-focus-retry notes-focus-page hover-close hover-min hover-bar hover-primary pressed-primary hover-open hover-menu close-question close-question-yes close-question-no backdrop-mica backdrop-acrylic filter-results filter-edit filter-no-matches narrow-columns maximized-chrome narrow-long-notice"
 VIEWS="list large small"
 THEMES="light dark"
 SIZES="1280x800 860x660"
+MIN_SIZE="520x360"
 MIN_DEMOS="filter-results filter-edit filter-no-matches narrow-long-notice"
 MID_DEMOS="narrow-columns"
 
@@ -46,9 +47,14 @@ n=0
 for demo in $DEMOS; do
     # The notes view takes the whole content area: the list view makes no difference to it.
     views="$VIEWS"
-    case "$demo" in notes*) views="list" ;; row-menu) views="list large" ;; esac
     sizes="$SIZES"
-    case " $MIN_DEMOS " in *" $demo "*) sizes="520x360 1280x800" ;; esac
+    case "$demo" in
+        notes*) views="list" ;;
+        row-menu) views="list large" ;;
+        small-install-menu) views="small" ;;
+        long-versions) views="large"; sizes="$MIN_SIZE" ;;
+    esac
+    case " $MIN_DEMOS " in *" $demo "*) sizes="$MIN_SIZE 1280x800" ;; esac
     case " $MID_DEMOS " in *" $demo "*) views="list"; sizes="640x660" ;; esac
     for view in $views; do
         for theme in $THEMES; do

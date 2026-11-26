@@ -13,13 +13,16 @@ use mdshared_ui::overlay::{dialog_bounds, draw_backdrop_presence};
 use mdshared_ui::settings::{Form, Outcome, Row, Style, Value};
 use mdshared_ui::theme::Palette;
 
-/// "Start Hub with Windows" (the Run key).
+pub const START_LABEL: &str = "Start with Windows";
+pub const NOTIFY_LABEL: &str = "Notify about updates";
+
+/// "Start with Windows" (the Run key).
 pub const START: u32 = 1;
-/// "Show an icon in the tray".
+/// "Keep Hub in the tray".
 pub const TRAY: u32 = 2;
-/// "Tell me when updates are found".
+/// "Notify about updates".
 pub const NOTIFY: u32 = 3;
-/// "Look for updates": the hours between checks, by index into [`INTERVALS`].
+/// "Check for updates automatically": hours between checks, by index into [`INTERVALS`].
 pub const INTERVAL: u32 = 4;
 /// "Update Hub": the button of the About group.
 pub const UPDATE_HUB: u32 = 5;
@@ -28,15 +31,15 @@ pub const BACKDROP: u32 = 6;
 
 /// The help line of "Window backdrop". Hub's own words: the shared one names a side pane, which
 /// Hub does not have (its pane under the list stays opaque, see `frost.rs`).
-pub const BACKDROP_HELP: &str = "Windows 11. Behind the title row and the two bars.";
+pub const BACKDROP_HELP: &str = "Tint the title and toolbars on supported Windows 11 PCs.";
 
-/// The choices of "Look for updates": the words, and the hours (0 is never: a manual check only).
+/// The automatic check choices and their hours (0 means manual checks only).
 pub const INTERVALS: [(&str, u32); 5] = [
     ("Every hour", 1),
     ("Every 6 hours", 6),
     ("Every day", 24),
     ("Every week", 168),
-    ("Never", 0),
+    ("Manually only", 0),
 ];
 
 /// The categories of the card, in order.
@@ -64,7 +67,7 @@ pub fn interval_index(hours: u32) -> usize {
         .iter()
         .position(|(_, h)| *h == hours)
         .unwrap_or_else(|| {
-            // Never is 0 hours; for any other count the closest of the timed choices.
+            // Manual-only is 0 hours; for any other count use the closest timed choice.
             (0..INTERVALS.len() - 1)
                 .min_by_key(|i| INTERVALS[*i].1.abs_diff(hours))
                 .unwrap_or(1)
@@ -80,12 +83,10 @@ pub fn rows(m: &Model) -> Vec<Row> {
     let names: Vec<&str> = INTERVALS.iter().map(|(n, _)| *n).collect();
     vec![
         Row::header(PAGES[0]),
-        Row::toggle(START, "Start Hub with Windows", m.start)
-            .help("Hub stays in the tray and checks quietly. Closing its window does not quit it."),
-        Row::toggle(TRAY, "Show an icon in the tray", m.tray)
-            .help("Off: closing the window quits Hub."),
-        Row::toggle(NOTIFY, "Tell me when updates are found", m.notify)
-            .help("One notification per check, never one per app."),
+        Row::toggle(START, START_LABEL, m.start).help("Open Hub in the tray at sign-in"),
+        Row::toggle(TRAY, "Keep Hub in the tray", m.tray)
+            .help("Closing the window keeps Hub running"),
+        Row::toggle(NOTIFY, NOTIFY_LABEL, m.notify).help("Show notifications from the tray"),
         Row::choice(
             BACKDROP,
             Backdrop::TITLE,
@@ -96,11 +97,10 @@ pub fn rows(m: &Model) -> Vec<Row> {
         Row::header(PAGES[1]),
         Row::choice(
             INTERVAL,
-            "Look for updates",
+            "Check for updates automatically",
             &names,
             interval_index(m.interval_hours),
-        )
-        .help("One request per app, to the address its release publishes."),
+        ),
         Row::header(PAGES[2]),
         // An action row has no help line: where the update stands is part of the label.
         Row::action(
@@ -394,15 +394,77 @@ mod tests {
 
     #[test]
     fn the_choices_map_to_hours_and_back() {
+        assert_eq!(INTERVALS.map(|(_, hours)| hours), [1, 6, 24, 168, 0]);
         for (i, (_, h)) in INTERVALS.iter().enumerate() {
             assert_eq!(interval_index(*h), i);
             assert_eq!(interval_hours(i), Some(*h));
         }
         assert_eq!(interval_hours(INTERVALS.len()), None);
-        // A value written by hand is shown as the nearest timed choice, never as Never.
+        // A value written by hand is shown as the nearest timed choice, not as manual-only.
         assert_eq!(interval_index(12), 1, "12 h is nearer 6 than 24");
         assert_eq!(interval_index(20), 2);
         assert_eq!(interval_index(100_000), 3);
+    }
+
+    #[test]
+    fn the_card_explains_behavior_and_matches_the_tray_labels() {
+        use crate::tray::{self, Entry, Snapshot, TrayCmd};
+        let rows = rows(&model());
+        for (id, expected_label, expected_help) in [
+            (
+                START,
+                "Start with Windows",
+                "Open Hub in the tray at sign-in",
+            ),
+            (
+                TRAY,
+                "Keep Hub in the tray",
+                "Closing the window keeps Hub running",
+            ),
+            (
+                NOTIFY,
+                "Notify about updates",
+                "Show notifications from the tray",
+            ),
+        ] {
+            let (label, help) = rows
+                .iter()
+                .find_map(|row| match row {
+                    Row::Toggle {
+                        id: row_id,
+                        label,
+                        help,
+                        ..
+                    } if *row_id == id => Some((label, help)),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(
+                (label.as_str(), help.as_str()),
+                (expected_label, expected_help)
+            );
+            if let Some(cmd) = match id {
+                START => Some(TrayCmd::ToggleStart),
+                NOTIFY => Some(TrayCmd::ToggleNotify),
+                _ => None,
+            } {
+                assert!(
+                    tray::menu(&Snapshot::default())
+                        .iter()
+                        .any(|entry| matches!(
+                            entry, Entry::Item { cmd: c, label: l, .. } if *c == cmd && l == label
+                        ))
+                );
+            }
+        }
+        assert!(rows.iter().any(|row| matches!(row,
+            Row::Choice { id: INTERVAL, label, options, .. }
+            if label == "Check for updates automatically" && options.last().unwrap() == "Manually only"
+        )));
+        assert!(rows.iter().any(|row| matches!(row,
+            Row::Choice { id: BACKDROP, help, .. }
+            if help == "Tint the title and toolbars on supported Windows 11 PCs."
+        )));
     }
 
     #[test]

@@ -522,7 +522,7 @@ pub enum Cmd {
     NotesClose,
     /// "Try again" in the notes view.
     NotesRetry,
-    /// "Release page" in the notes view: the release on GitHub, in the browser.
+    /// "View on GitHub" in the notes view: the release on GitHub, in the browser.
     NotesPage,
     FocusFilter,
     FilterChar(char),
@@ -539,11 +539,41 @@ pub enum Cmd {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MenuItem {
     Open,
+    Action(Act),
     ShowInFolder,
     ReleaseNotes,
     SkipVersion,
     RollBack,
     GitHub,
+}
+
+/// Small tiles have no separate buttons. Lead with the same available actions a row shows,
+/// then keep its secondary menu entries; Open, when also on the row, appears only once.
+pub fn small_menu_items(
+    app: &AppVm,
+    secondary: Vec<(MenuItem, &'static str, bool)>,
+) -> Vec<(MenuItem, &'static str, bool)> {
+    let mut items: Vec<_> = crate::view::row_actions(app)
+        .iter()
+        .map(|b| {
+            (
+                if b.act == Act::Open {
+                    MenuItem::Open
+                } else {
+                    MenuItem::Action(b.act)
+                },
+                b.label,
+                true,
+            )
+        })
+        .collect();
+    let has_open = items.iter().any(|(item, _, _)| *item == MenuItem::Open);
+    items.extend(
+        secondary
+            .into_iter()
+            .filter(|(item, _, _)| !has_open || *item != MenuItem::Open),
+    );
+    items
 }
 
 pub fn act_cmd(id: &'static str, act: Act) -> Cmd {
@@ -1062,6 +1092,10 @@ impl Engine {
         self.filter_focus
     }
 
+    pub fn filter(&self) -> &str {
+        &self.filter
+    }
+
     pub fn notes_input(&self) -> Option<bool> {
         self.notes
             .as_ref()
@@ -1248,6 +1282,31 @@ impl Engine {
         }
         v.push((MenuItem::GitHub, "GitHub", true));
         v
+    }
+
+    /// The choices currently available on this tile, also used to validate pointer release.
+    pub fn menu_items_for(&self, id: &str, view: View) -> Vec<(MenuItem, &'static str, bool)> {
+        let items = self.menu_items(id);
+        if view != View::Small {
+            return items;
+        }
+        if let Some(slot) = self.slot(id) {
+            small_menu_items(&app_vm(slot, check::now()), items)
+        } else if let Some(app) = self
+            .fixed
+            .as_ref()
+            .and_then(|vm| vm.apps.iter().find(|a| a.id == id))
+        {
+            small_menu_items(app, items)
+        } else {
+            items
+        }
+    }
+
+    pub fn menu_choice_enabled(&self, id: &str, view: View, item: MenuItem) -> bool {
+        self.menu_items_for(id, view)
+            .iter()
+            .any(|&(choice, _, enabled)| choice == item && enabled)
     }
 
     fn can_roll_back(&self, slot: &Slot) -> bool {
@@ -1901,6 +1960,16 @@ impl Engine {
         let app = slot.app;
         match item {
             MenuItem::Open => self.open(id),
+            MenuItem::Action(act) => {
+                // A check or worker can change the row while the menu is open.
+                if !crate::view::row_actions(&app_vm(slot, check::now()))
+                    .iter()
+                    .any(|b| b.act == act)
+                {
+                    return false;
+                }
+                self.apply(act_cmd(id, act))
+            }
             MenuItem::ShowInFolder => {
                 if let Some(i) = &slot.installed {
                     self.shell.reveal(&i.exe);

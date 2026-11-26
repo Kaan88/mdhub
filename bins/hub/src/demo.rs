@@ -25,6 +25,8 @@ pub const NAMES: &[&str] = &[
     "settings-about",
     "settings-interval-menu",
     "row-menu",
+    "small-install-menu",
+    "long-versions",
     "notes",
     "notes-offer",
     "notes-loading",
@@ -77,15 +79,22 @@ pub fn draw_overlays(
 ) {
     if vm.demo_menu
         && let Some((anchor, _)) = lay.hits.iter().find(|(_, h)| *h == Hit::Menu(0))
+        && let Some(app) = vm.apps.first()
     {
-        let items = [
-            (MenuItem::Open, "Open", true),
-            (MenuItem::ShowInFolder, "Show in folder", true),
+        let installed = app.installed.is_some();
+        let items = vec![
+            (MenuItem::Open, "Open", installed),
+            (MenuItem::ShowInFolder, "Show in folder", installed),
             (MenuItem::ReleaseNotes, "Release notes", true),
             (MenuItem::SkipVersion, "Skip this version", false),
             (MenuItem::GitHub, "GitHub", true),
         ];
-        crate::popup::Popup::new("mdedit", *anchor, items).draw(
+        let items = if vm.view == View::Small {
+            crate::glue::small_menu_items(app, items)
+        } else {
+            items
+        };
+        crate::popup::Popup::new(app.id, *anchor, vm.view, items).draw(
             p,
             pal,
             area,
@@ -114,7 +123,7 @@ An option to leave out tabs you barely looked at, and a **tidier AI menu**. This
 - The AI menu lists *saved prompts* first, then the commands. A long prompt's name no longer runs under its `Modify` button.
 - Find in files remembers the last folder.
   - It also remembers the file filter, such as `*.rs`.
-  - Clear both with the [reset link](https://github.com/Kaan88/markdown-editor-rs).
+  - Use [Reset filters](https://github.com/Kaan88/markdown-editor-rs) to clear both.
 
 ## Fixed
 
@@ -281,9 +290,15 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
     let r = Some;
     Some(match name {
         "backdrop-mica" | "backdrop-acrylic" => build("main", view)?,
-        "row-menu" => {
-            let mut v = build("main", view)?;
+        "row-menu" | "small-install-menu" => {
+            let mut v = build(if name == "row-menu" { "main" } else { "first-run" }, view)?;
             v.demo_menu = true;
+            v
+        }
+        "long-versions" => {
+            let mut v = build("main", view)?;
+            v.apps[0].installed = Some("1.2.0-rc.20261126.windows.1".into());
+            v.apps[0].latest = Some("1.2.1-rc.20261126.windows.2".into());
             v
         }
         "notes-offer" => {
