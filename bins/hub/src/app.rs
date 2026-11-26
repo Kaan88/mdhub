@@ -5,7 +5,8 @@
 use crate::cli::{self, Args};
 use crate::demo;
 use crate::glue::{
-    self, Cmd, Deps, Engine, Event, Key, Post, RealShell, Tmpl, command, key_command, repeatable,
+    self, Cmd, Deps, Engine, Event, Key, MenuItem, NotesKey, Post, RealShell, Tmpl, command,
+    key_command, repeatable,
 };
 use crate::motion::{self, Overlay, Painted, WindowMotion};
 use crate::placement::{DEFAULT_SIZE, MIN_SIZE, windows as placement};
@@ -14,7 +15,7 @@ use crate::settings;
 use crate::trace::Trace;
 use crate::tray::{self, Do, Input, Life, Snapshot, TrayCmd};
 use crate::view::{self, HEAD_H, ROW_H};
-use crate::vm::{Hit, Layout, View, Vm};
+use crate::vm::{Hit, Layout, Target, View, Vm};
 use hub_core::check;
 use hub_core::selfupdate;
 use hub_core::state::{Store, WindowPlacement};
@@ -83,7 +84,11 @@ struct App {
     nsig: Option<(&'static str, String, u8)>,
     /// The notes scrollbar's thumb is being dragged, taken this far below its top.
     ngrab: Option<f32>,
+    notes_focus: Hit,
     mouse: (f32, f32),
+    armed: Option<Target>,
+    menu_press: Option<(&'static str, MenuItem)>,
+    settings_pressed: bool,
     mods: ModifiersState,
     popup: Overlay<Popup>,
     motion: WindowMotion,
@@ -203,8 +208,15 @@ impl App {
     }
 
     fn apply(&mut self, cmd: Cmd) {
+        let notes_was_open = self.engine.notes_input().is_some();
         if self.engine.apply(cmd) {
             self.dirty = true;
+            if notes_was_open != self.engine.notes_input().is_some()
+                || matches!(cmd, Cmd::NotesRetry | Cmd::OpenNotes(_))
+            {
+                self.notes_focus = Hit::None;
+            }
+            self.invalidate_press();
         }
         self.check_restart();
         self.keep_selection_visible();
@@ -292,7 +304,19 @@ impl App {
         }
         let pal = self.pal();
         let mut vm = self.engine.vm(check::now());
+        vm.maximized = window.is_maximized();
+        if let Some(armed) = &self.armed {
+            vm.pointer.held = armed.live_hit(&vm).unwrap_or(Hit::None);
+        }
         if let Some(n) = vm.notes.as_mut() {
+            if self.notes_focus == Hit::NotesRetry
+                && !matches!(n.state, crate::vm::NotesState::Failed(_))
+            {
+                self.notes_focus = Hit::None;
+            }
+            if self.notes_focus != Hit::None {
+                vm.notes_focus = self.notes_focus;
+            }
             // Wide while the pointer is on it or drags it (from the last frame's hits).
             n.bar_active = self.ngrab.is_some()
                 || (!self.popup.is_open()
@@ -367,6 +391,14 @@ impl App {
         self.layout = layout;
         self.vm = vm;
         self.dirty = false;
+        if let Some(target) = &self.armed {
+            let present = target.live_hit(&self.vm).is_some_and(|hit| {
+                hit == Hit::None || self.layout.hits.iter().any(|(_, drawn)| *drawn == hit)
+            });
+            if !present {
+                self.cancel_press();
+            }
+        }
         // The rows moved under a still pointer (a scroll, a new filter, a result): the highlight
         // follows the pointer, so a click lands on the row that is lit.
         let covered = self.popup.is_open() || self.settings.is_open();
@@ -479,16 +511,37 @@ impl App {
         }
     }
 
-    fn click(&mut self) {
+    fn cancel_press(&mut self) {
+        self.dirty |= self.armed.take().is_some();
+        self.menu_press = None;
+        self.settings_pressed = false;
+        self.dirty |= self.engine.set_held(Hit::None);
+    }
+
+    fn invalidate_press(&mut self) {
+        if let Some(target) = &self.armed
+            && target.live_hit(&self.engine.vm(check::now())).is_none()
+        {
+            self.cancel_press();
+        }
+    }
+
+    fn mouse_press(&mut self) {
+        self.cancel_press();
+        if self.settings.is_open() {
+            self.settings_pressed = true;
+            self.settings_press();
+            return;
+        }
         let (x, y) = self.mouse;
         if let Some(pop) = self.popup.input() {
-            pop.menu.pointer(x, y);
-            let picked = pop.menu.chosen().map(|item| (pop.id, item));
-            self.popup.hide();
-            self.dirty = true;
-            if let Some((id, item)) = picked {
-                self.apply(Cmd::MenuPick(id, item));
+            if pop.menu.contains(x, y) {
+                pop.menu.pointer(x, y);
+                self.menu_press = pop.menu.chosen().map(|item| (pop.id, item));
+            } else {
+                self.popup.hide();
             }
+            self.dirty = true;
             return;
         }
         let Some(window) = self.window.clone() else {
@@ -501,6 +554,9 @@ impl App {
             let _ = window.drag_resize_window(dir);
             return;
         }
+        if !Rect::new(0.0, 0.0, lw, lh).contains(x, y) {
+            return;
+        }
         let hit = self.layout.at(x, y);
         match hit {
             Hit::Drag => {
@@ -510,15 +566,12 @@ impl App {
                 if double {
                     self.last_title_click = None;
                     window.set_maximized(!window.is_maximized());
+                    self.dirty = true;
                 } else {
                     self.last_title_click = Some(Instant::now());
                     let _ = window.drag_window();
                 }
             }
-            Hit::Min => window.set_minimized(true),
-            Hit::Max => window.set_maximized(!window.is_maximized()),
-            Hit::Close => self.request_close(),
-            Hit::Settings => self.open_settings(0),
             Hit::NotesTrack | Hit::NotesThumb => {
                 match crate::changelog::bar_press(&self.layout, x, y, self.nscroll) {
                     Some(crate::changelog::BarPress::Grab(g)) => self.ngrab = Some(g),
@@ -527,18 +580,74 @@ impl App {
                 }
                 self.dirty = true;
             }
-            Hit::None => {
-                // A click on nothing leaves the filter box.
-                self.apply(Cmd::FilterBlur);
-            }
             hit => {
-                let vm = self.vm.clone();
-                match command(hit, &vm) {
-                    Some(Cmd::OpenMenu(i)) => self.open_popup(i),
-                    Some(cmd) => self.apply(cmd),
-                    None => {}
+                self.armed = Target::at(hit, &self.vm)
+                    .filter(|target| target.live_hit(&self.engine.vm(check::now())).is_some());
+                if self.armed.is_some() {
+                    self.dirty |= self.engine.set_held(hit);
                 }
             }
+        }
+    }
+
+    fn mouse_release(&mut self) {
+        self.end_bar_drag();
+        if std::mem::take(&mut self.settings_pressed) && self.settings.is_open() {
+            self.settings_release();
+            return;
+        }
+        let (x, y) = self.mouse;
+        if let Some((id, item)) = self.menu_press.take()
+            && let Some(pop) = self.popup.input()
+        {
+            self.dirty |= pop.menu.pointer(x, y);
+            if id == pop.id && pop.menu.chosen() == Some(item) {
+                self.popup.hide();
+                self.dirty = true;
+                if self
+                    .engine
+                    .menu_items(id)
+                    .iter()
+                    .any(|&(i, _, on)| i == item && on)
+                {
+                    self.apply(Cmd::MenuPick(id, item));
+                }
+            }
+        }
+        let target = self.armed.take();
+        self.dirty |= target.is_some() | self.engine.set_held(Hit::None);
+        let (Some(target), Some(window)) = (target, self.window.clone()) else {
+            return;
+        };
+        let (lw, lh) = self.logical();
+        if self.settings.is_open()
+            || self.popup.is_open()
+            || !Rect::new(0.0, 0.0, lw, lh).contains(x, y)
+            || (!window.is_maximized() && edge_at(x, y, lw, lh).is_some())
+        {
+            return;
+        }
+        let hit = self.layout.at(x, y);
+        let live = self.engine.vm(check::now());
+        match target.release(hit, &self.vm, &live) {
+            Some(Hit::Min) => window.set_minimized(true),
+            Some(Hit::Max) => {
+                window.set_maximized(!window.is_maximized());
+                self.dirty = true;
+            }
+            Some(Hit::Close) => self.request_close(),
+            Some(Hit::Settings) => self.open_settings(0),
+            Some(Hit::None) => self.apply(Cmd::FilterBlur),
+            Some(h) => match command(h, &live) {
+                Some(Cmd::OpenMenu(_)) => {
+                    if let Hit::Menu(i) = hit {
+                        self.open_popup(i);
+                    }
+                }
+                Some(cmd) => self.apply(cmd),
+                None => {}
+            },
+            None => {}
         }
     }
 
@@ -546,6 +655,7 @@ impl App {
 
     /// Opens the card from the engine's rows: a form built now, so it shows what is true now.
     fn open_settings(&mut self, page: usize) {
+        self.cancel_press();
         self.popup.hide();
         self.settings
             .show(settings::Card::new(self.engine.settings_rows(), page));
@@ -701,12 +811,19 @@ impl App {
         if self.popup.is_open() {
             if ev.logical_key == WKey::Named(NamedKey::Escape) {
                 self.popup.hide();
+                self.menu_press = None;
                 self.dirty = true;
             }
             return;
         }
         let ctrl = self.mods.control_key();
         let shift = self.mods.shift_key();
+        if let Some(retry) = self.engine.notes_input() {
+            if let Some(key) = map_key(&ev) {
+                self.notes_key(key, shift, ev.repeat, retry);
+            }
+            return;
+        }
         let focus = self.engine.filter_focus();
         if focus
             && !ctrl
@@ -721,23 +838,6 @@ impl App {
                 return;
             }
         }
-        if self.vm.notes.is_some() {
-            // The notes view: the keys move the text, Esc or Backspace go back.
-            if let Some(k) = map_key(&ev) {
-                if let Some(nav) = crate::glue::notes_nav(k) {
-                    let next = crate::changelog::scrolled(nav, self.nscroll, self.nmax, self.nview);
-                    if next != self.nscroll {
-                        self.nscroll = next;
-                        self.dirty = true;
-                    }
-                    return;
-                }
-                if k == Key::Backspace && !ev.repeat {
-                    self.apply(Cmd::NotesClose);
-                    return;
-                }
-            }
-        }
         let cols = match self.vm.view {
             View::List => 1,
             v => crate::grid::geometry(v, self.logical().0).0,
@@ -747,6 +847,33 @@ impl App {
             && (!ev.repeat || repeatable(&cmd))
         {
             self.apply(cmd);
+        }
+    }
+
+    fn notes_key(&mut self, key: Key, shift: bool, repeat: bool, retry: bool) {
+        match glue::notes_key(key, shift, repeat, retry, self.notes_focus) {
+            Some(NotesKey::Scroll(nav)) => {
+                let next = crate::changelog::scrolled(nav, self.nscroll, self.nmax, self.nview);
+                self.dirty |= next != self.nscroll;
+                self.nscroll = next;
+            }
+            Some(NotesKey::Focus(hit)) => {
+                self.dirty |= self.notes_focus != hit;
+                self.notes_focus = hit;
+                // Retry is at the end of the scrolling text. Reveal it, not the underlying list.
+                if hit == Hit::NotesRetry
+                    && !self
+                        .layout
+                        .hits
+                        .iter()
+                        .any(|(r, h)| *h == hit && r.h >= 28.0)
+                {
+                    self.dirty |= self.nscroll != self.nmax;
+                    self.nscroll = self.nmax;
+                }
+            }
+            Some(NotesKey::Run(cmd)) => self.apply(cmd),
+            None => {}
         }
     }
 }
@@ -804,6 +931,7 @@ impl ApplicationHandler<Event> for App {
             ev => {
                 if self.engine.handle(ev) {
                     self.dirty = true;
+                    self.invalidate_press();
                 }
                 // One balloon per check that found news (the rule is the engine's).
                 if let Some(m) = self.engine.take_message()
@@ -829,6 +957,7 @@ impl ApplicationHandler<Event> for App {
         }
         if self.popup.is_open() && closes_popup(&event) {
             self.popup.hide();
+            self.menu_press = None;
             self.dirty = true;
         }
         match event {
@@ -836,10 +965,12 @@ impl ApplicationHandler<Event> for App {
             WindowEvent::RedrawRequested => self.draw(),
             WindowEvent::Moved(_) => self.remember_window_placement(),
             WindowEvent::Resized(_) => {
+                self.cancel_press();
                 self.remember_window_placement();
                 self.dirty = true;
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                self.cancel_press();
                 self.scale = scale_factor as f32;
                 self.dirty = true;
             }
@@ -858,10 +989,7 @@ impl ApplicationHandler<Event> for App {
                 }
                 if !focused {
                     self.end_bar_drag();
-                }
-                // A press that ended elsewhere (minimized, dragged, another window) is over.
-                if !focused && self.engine.set_held(Hit::None) {
-                    self.dirty = true;
+                    self.cancel_press();
                 }
                 self.focused = focused;
                 // The chrome is frosted only with the keyboard: drawn again when that changes.
@@ -897,29 +1025,12 @@ impl ApplicationHandler<Event> for App {
                 state: ElementState::Pressed,
                 button: MouseButton::Left,
                 ..
-            } => {
-                if self.settings.is_open() {
-                    self.settings_press();
-                } else {
-                    // The button looks pressed until the release (the press already acted).
-                    let at = self.engine.pointer().hot;
-                    if self.engine.set_held(at) {
-                        self.dirty = true;
-                    }
-                    self.click();
-                }
-            }
+            } => self.mouse_press(),
             WindowEvent::MouseInput {
                 state: ElementState::Released,
                 button: MouseButton::Left,
                 ..
-            } => {
-                self.end_bar_drag();
-                if self.engine.set_held(Hit::None) {
-                    self.dirty = true;
-                }
-                self.settings_release();
-            }
+            } => self.mouse_release(),
             WindowEvent::MouseWheel { delta, .. } => {
                 let dy = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y * ROW_H,
@@ -935,6 +1046,7 @@ impl ApplicationHandler<Event> for App {
                 if self.vm.notes.is_some() {
                     let next = (self.nscroll - dy).clamp(0.0, self.nmax);
                     if next != self.nscroll {
+                        self.cancel_press();
                         self.nscroll = next;
                         self.dirty = true;
                     }
@@ -942,6 +1054,7 @@ impl ApplicationHandler<Event> for App {
                 }
                 let next = (self.scroll - dy).clamp(0.0, self.max_scroll);
                 if next != self.scroll {
+                    self.cancel_press();
                     self.scroll = next;
                     self.dirty = true;
                 }
@@ -989,6 +1102,7 @@ impl ApplicationHandler<Event> for App {
         }
         if live && self.engine.tick(now) {
             self.dirty = true;
+            self.invalidate_press();
         }
         if let Some(text) = self.args.tray_test_balloon.take()
             && let Some(t) = &self.tray
@@ -1184,6 +1298,8 @@ impl App {
         self.nmax = 0.0;
         self.nview = 0.0;
         self.nsig = None;
+        self.ngrab = None;
+        self.notes_focus = Hit::None;
         self.mouse = (-1.0, -1.0);
         self.cursor = CursorIcon::Default;
         self.shown = false;
@@ -1191,7 +1307,7 @@ impl App {
         self.dirty = false;
         self.engine.set_hover(None);
         self.engine.set_hot(Hit::None);
-        self.engine.set_held(Hit::None);
+        self.cancel_press();
         self.trace.memory("window closed");
     }
 
@@ -1424,8 +1540,12 @@ pub fn run(mut args: Args, started: Instant) -> i32 {
         nmax: 0.0,
         nview: 0.0,
         ngrab: None,
+        notes_focus: Hit::None,
         nsig: None,
         mouse: (-1.0, -1.0),
+        armed: None,
+        menu_press: None,
+        settings_pressed: false,
         mods: ModifiersState::empty(),
         popup: Overlay::new(document::MENU),
         motion: WindowMotion::default(),

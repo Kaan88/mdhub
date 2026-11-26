@@ -6,7 +6,7 @@ use crate::glue::{
     Cmd, Key, MenuItem, Phase, Slot, act_cmd, app_vm, check_wait, command, fail_text, fmt_date,
     fmt_size, key_command, row_of,
 };
-use crate::vm::{Act, Hit, View};
+use crate::vm::{Act, Hit, Target, View};
 use hub_core::catalog::find;
 use hub_core::check;
 use hub_core::install::InstallError;
@@ -268,9 +268,13 @@ fn a_hit_becomes_the_command_for_the_app_in_that_row_as_shown() {
         Some(Cmd::SetView(View::Small))
     );
     assert_eq!(command(Hit::Filter, &vm), Some(Cmd::FocusFilter));
-    assert_eq!(command(Hit::BannerYes, &vm), Some(Cmd::BannerYes));
-    assert_eq!(command(Hit::BannerNo, &vm), Some(Cmd::BannerNo));
-    assert_eq!(command(Hit::BannerClose, &vm), Some(Cmd::BannerNo));
+    assert_eq!(command(Hit::FilterOpen, &vm), Some(Cmd::FocusFilter));
+    assert_eq!(command(Hit::FilterClear, &vm), Some(Cmd::FilterClear));
+    let offer = crate::demo::build("close-question", View::List).unwrap();
+    assert_eq!(command(Hit::BannerYes, &offer), Some(Cmd::BannerYes));
+    assert_eq!(command(Hit::BannerNo, &offer), Some(Cmd::BannerNo));
+    assert_eq!(command(Hit::BannerClose, &offer), Some(Cmd::BannerNo));
+    assert_eq!(command(Hit::BannerYes, &vm), None, "there is no offer");
     // The window's own hits are not commands, and a row that is gone is not an app.
     for h in [Hit::Drag, Hit::Min, Hit::Max, Hit::Close, Hit::None] {
         assert_eq!(command(h, &vm), None);
@@ -343,7 +347,7 @@ fn keys_map_to_commands() {
         Some(Cmd::FilterBack)
     );
     assert_eq!(k(true, Key::Enter, false, false, 1), Some(Cmd::FilterBlur));
-    assert_eq!(k(true, Key::Esc, false, false, 1), Some(Cmd::Esc));
+    assert_eq!(k(true, Key::Esc, false, false, 1), Some(Cmd::FilterEscape));
     assert_eq!(k(true, Key::Up, false, false, 1), None);
 }
 
@@ -688,6 +692,105 @@ fn update_asks_again_whether_the_app_is_open_now() {
     assert!(fx.vm().banner.is_some(), "asked, not closed");
     assert!(!fx.eng.busy());
     assert_eq!(fx.file("mdedit", "mdedit.exe"), Some(body("a")));
+}
+
+#[test]
+fn update_all_counts_and_updates_the_catalog_even_when_a_row_is_filtered_out() {
+    let mut fx = two_open_updates("filtered-all");
+    fx.cmd(Cmd::FocusFilter);
+    for c in "mdedit".chars() {
+        fx.cmd(Cmd::FilterChar(c));
+    }
+    let vm = fx.vm();
+    assert_eq!(vm.apps.iter().map(|a| a.id).collect::<Vec<_>>(), ["mdedit"]);
+    assert_eq!(vm.updates, 2);
+    fx.cmd(Cmd::UpdateAll);
+    assert_eq!(fx.vm().busy.as_deref(), Some("Updating 2 apps\u{2026}"));
+    assert!(fx.eng.apply(Cmd::FilterClear));
+    assert!(fx.vm().filter_focus, "Clear leaves the field's focus alone");
+    fx.settle();
+    for (id, exe) in [("mdedit", "mdedit.exe"), ("mdview", "mdview.exe")] {
+        assert_eq!(fx.file(id, exe), Some(body("b")));
+    }
+    assert_eq!(fx.vm().updates, 0);
+}
+
+#[test]
+fn filter_escape_clears_then_blurs_even_while_an_offer_is_visible() {
+    let mut fx = two_open_updates("filter-escape-offer");
+    fx.shell.running.store(true, Ordering::SeqCst);
+    fx.cmd(Cmd::Update("mdedit"));
+    let key = |focused| key_command(focused, Key::Esc, false, false, 1).unwrap();
+    fx.cmd(Cmd::FocusFilter);
+    fx.cmd(Cmd::FilterChar('z'));
+    let offer = fx.vm().banner.unwrap().key;
+    assert!(fx.eng.apply(key(true)));
+    assert_eq!(fx.vm().filter, "");
+    assert!(fx.vm().filter_focus);
+    assert!(fx.eng.apply(key(true)));
+    assert!(!fx.vm().filter_focus);
+    assert_eq!(fx.vm().banner.unwrap().key, offer);
+    assert!(fx.eng.apply(key(false)));
+    assert!(fx.vm().banner.is_none());
+}
+
+#[test]
+fn choosing_the_same_row_redraws_when_it_blurs_the_filter() {
+    let mut fx = Fx::new("select-filter-focus");
+    assert!(fx.eng.apply(Cmd::FocusFilter));
+    assert!(fx.eng.apply(Cmd::Select(0)));
+    assert!(!fx.vm().filter_focus);
+    assert!(!fx.eng.apply(Cmd::Select(0)));
+}
+
+#[test]
+fn a_late_release_cannot_answer_a_replaced_offer_before_or_after_it_is_drawn() {
+    let mut fx = two_open_updates("replaced-offer");
+    fx.shell.running.store(true, Ordering::SeqCst);
+    fx.shell.view_too.store(true, Ordering::SeqCst);
+    fx.cmd(Cmd::Update("mdedit"));
+    let painted = fx.vm();
+    let yes = Hit::BannerYes;
+    let pressed = Target::at(yes, &painted).unwrap();
+    assert_eq!(pressed.release(yes, &painted, &painted), Some(yes));
+    assert_eq!(pressed.release(Hit::BannerNo, &painted, &painted), None);
+    // A new manifest can change the version without changing the wording or app.
+    fx.publish_files("mdedit", "3.0.0", &[("mdedit.exe", body("c"))], None);
+    fx.check();
+    let newer = fx.vm();
+    assert_eq!(newer.banner.as_ref().unwrap().key.version, "3.0.0");
+    assert_eq!(pressed.release(yes, &painted, &newer), None);
+    assert_eq!(pressed.release(yes, &newer, &newer), None);
+    // A newly issued question, even for the same version, has its own identity.
+    let pressed = Target::at(yes, &newer).unwrap();
+    fx.cmd(Cmd::Update("mdedit"));
+    assert_eq!(pressed.release(yes, &newer, &fx.vm()), None);
+    fx.cmd(Cmd::Update("mdview"));
+    assert_eq!(pressed.release(yes, &newer, &fx.vm()), None);
+    let hub = crate::demo::build("banner", View::List).unwrap();
+    assert_eq!(pressed.release(yes, &newer, &hub), None);
+    assert_eq!(command(yes, &hub), Some(Cmd::HubRestart));
+    assert!(!fx.eng.installing());
+}
+
+#[test]
+fn release_tracks_an_app_action_not_a_filtered_index_or_another_action() {
+    let painted = crate::demo::build("main", View::List).unwrap();
+    let original = Hit::Action(3, Act::Update);
+    let press = Target::at(original, &painted).unwrap();
+    assert_eq!(press.release(original, &painted, &painted), Some(original));
+    assert_eq!(
+        press.release(Hit::Action(0, Act::Update), &painted, &painted),
+        None
+    );
+    let mut filtered = painted.clone();
+    filtered.apps.remove(0);
+    let moved = Hit::Action(2, Act::Update);
+    assert_eq!(press.release(moved, &filtered, &filtered), Some(moved));
+    assert_eq!(press.release(original, &painted, &filtered), Some(moved));
+    assert_eq!(press.release(original, &filtered, &filtered), None);
+    filtered.apps[2].row = Row::UpToDate;
+    assert_eq!(press.release(moved, &filtered, &filtered), None);
 }
 
 #[test]

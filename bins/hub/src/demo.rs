@@ -2,7 +2,9 @@
 //! Everything here is made up; nothing reads this PC.
 use crate::glue::{MenuItem, Phase, Slot, app_vm, close_question};
 use crate::settings;
-use crate::vm::{Act, AppVm, Banner, Hit, Layout, NotesState, NotesVm, Pointer, View, Vm};
+use crate::vm::{
+    Act, AppVm, Banner, Hit, Layout, NotesState, NotesVm, OfferKey, Pointer, View, Vm,
+};
 use hub_core::catalog::{CATALOG, CatalogApp};
 use hub_core::model::{Latest, Row};
 
@@ -30,6 +32,9 @@ pub const NAMES: &[&str] = &[
     "notes-nofile",
     "notes-long",
     "notes-bar-active",
+    "notes-focus-back",
+    "notes-focus-retry",
+    "notes-focus-page",
     "hover-close",
     "hover-min",
     "hover-bar",
@@ -42,6 +47,12 @@ pub const NAMES: &[&str] = &[
     "close-question-no",
     "backdrop-mica",
     "backdrop-acrylic",
+    "filter-results",
+    "filter-edit",
+    "filter-no-matches",
+    "narrow-columns",
+    "maximized-chrome",
+    "narrow-long-notice",
 ];
 
 /// The window backdrop a demo's picture is drawn with: the main window with its chrome keyed
@@ -260,6 +271,7 @@ fn vm(apps: Vec<AppVm>, sel: usize, view: View) -> Vm {
         checked: "Checked 4 minutes ago".into(),
         hub_version: "0.1.0".into(),
         updates,
+        maximized: false,
         ..Vm::default()
     }
 }
@@ -276,7 +288,35 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
         }
         "notes-offer" => {
             let mut v = build("notes", view)?;
-            v.banner = Some(close_question("mdedit"));
+            v.banner = Some(close_question("mdedit", app_offer("mdedit", "1.2.1")));
+            v
+        }
+        "notes-focus-back" | "notes-focus-retry" | "notes-focus-page" => {
+            let mut v = build("notes-failed", view)?;
+            v.notes_focus = match name {
+                "notes-focus-back" => Hit::NotesBack,
+                "notes-focus-retry" => Hit::NotesRetry,
+                _ => Hit::NotesPage,
+            };
+            v
+        }
+        "filter-results" | "filter-edit" | "filter-no-matches" => {
+            let mut v = build("main", view)?;
+            v.filter = if name == "filter-no-matches" { "nothing matches" } else { "mdedit" }.into();
+            v.apps.retain(|a| a.id == v.filter);
+            v.filter_focus = name == "filter-edit";
+            v
+        }
+        "narrow-columns" => build("claude-switch", view)?,
+        "maximized-chrome" => {
+            let mut v = build("main", view)?;
+            v.maximized = true;
+            v
+        }
+        "narrow-long-notice" => {
+            let mut v = build("main", view)?;
+            v.checked = "Last check failed: GitHub could not be reached. Hub kept saved release information so you can try again later.".into();
+            v.hub_version = "0.1.5 (0.2.0 ready)".into();
             v
         }
         "main" => vm(
@@ -416,12 +456,12 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
         "banner" => {
             let mut v = build("main", view)?;
             v.banner = Some(Banner {
+                key: OfferKey { app: None, version: "0.2.0".into(), serial: 0 },
                 // The words the engine gives (`selfupdate::Status::label`).
                 text: "Hub 0.2.0 is ready: restart to finish".into(),
                 yes: "Restart now".into(),
                 no: "Later".into(),
                 warn: false,
-                hub: true,
             });
             v.hub_version = "0.1.0 (0.2.0 ready)".into();
             v.hover = Some(1);
@@ -567,7 +607,7 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
         // "main"): the bar alone, then with the pointer on its yes and on its no.
         "close-question" | "close-question-yes" | "close-question-no" => {
             let mut v = build("main", view)?;
-            v.banner = Some(close_question("Inbound"));
+            v.banner = Some(close_question("Inbound", app_offer("inbound", "0.9.0")));
             v.sel = 3;
             v.pointer.hot = match name {
                 "close-question-yes" => Hit::BannerYes,
@@ -578,6 +618,14 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
         }
         _ => return None,
     })
+}
+
+fn app_offer(id: &'static str, version: &str) -> OfferKey {
+    OfferKey {
+        app: Some(id),
+        version: version.into(),
+        serial: 0,
+    }
 }
 
 fn unreleased(id: &str) -> AppVm {
