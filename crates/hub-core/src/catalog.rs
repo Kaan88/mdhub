@@ -1,5 +1,5 @@
 //! The apps Hub knows: compiled in. Adding one is a new entry and a release of Hub.
-//! Scope, by the owner: mdedit, mdview, Sprawl, Inbound, Purge, Barbican.
+//! Scope, by the owner: mdedit, mdview, Sprawl, Inbound, Purge, Barbican, Claude Switch.
 
 pub struct CatalogApp {
     /// Lower-case id; the `app:` of its hub.txt.
@@ -33,7 +33,7 @@ pub struct CatalogApp {
     pub glyph: &'static str,
 }
 
-pub const CATALOG: [CatalogApp; 6] = [
+pub const CATALOG: [CatalogApp; 7] = [
     CatalogApp {
         id: "mdedit",
         name: "mdedit",
@@ -137,6 +137,23 @@ pub const CATALOG: [CatalogApp; 6] = [
         tile: [0x8a, 0x4a, 0xb8],
         glyph: "globe",
     },
+    CatalogApp {
+        id: "claude-switch",
+        name: "Claude Switch",
+        blurb: "Claude Code sessions under several accounts",
+        repo: "claude-switch",
+        exe: "claude-switch.exe",
+        launch_args: &[],
+        folder: "Claude Switch",
+        machine_folder: None,
+        uninstall_keys: &["{4F2C369B-84AF-4A46-AE8B-D22103025F78}_is1"],
+        wait: &[],
+        // Let Switch confirm quitting with live terminal tabs; Setup must not close it (D-035).
+        setup_closes_app: false,
+        legacy_manifest: None,
+        tile: [0xd9, 0x77, 0x57],
+        glyph: "code",
+    },
 ];
 
 pub fn find(id: &str) -> Option<&'static CatalogApp> {
@@ -187,6 +204,25 @@ mod tests {
         assert!(b.wait.contains(&"barbican.exe"));
         assert!(b.url_allowed("https://github.com/Kaan88/barbican/releases/download/v0.1.0/x"));
         assert!(!b.url_allowed("https://github.com/Kaan88/inbound/releases/download/v0.1.0/x"));
+    }
+
+    #[test]
+    fn claude_switch_matches_its_per_user_setup_and_waits_for_a_normal_quit() {
+        let app = find("claude-switch").unwrap();
+        assert_eq!(app.exe, "claude-switch.exe");
+        assert_eq!(app.folder, "Claude Switch");
+        assert_eq!(app.machine_folder, None);
+        assert_eq!(
+            app.uninstall_keys,
+            ["{4F2C369B-84AF-4A46-AE8B-D22103025F78}_is1"]
+        );
+        assert!(app.wait.is_empty());
+        assert!(!app.setup_closes_app);
+        assert_eq!(app.legacy_manifest, None);
+        assert_eq!(
+            app.latest_url("hub.txt"),
+            "https://github.com/Kaan88/claude-switch/releases/latest/download/hub.txt"
+        );
     }
 
     #[test]

@@ -1,8 +1,7 @@
 # What each app must change for Hub
 
-For the owner to approve, app by app. **Nothing here has been applied**: the first four projects were
-read (mdedit and mdview from their `main`, Sprawl and Inbound through `gh api`, all read only) and
-their files are as they were. Read 2026-11-22.
+For the owner to approve, app by app. The first four sections are proposals (read 2026-11-22);
+later entries say what has been applied and what has shipped.
 
 What Hub needs from every catalog app, whatever its row says:
 
@@ -13,20 +12,21 @@ What Hub needs from every catalog app, whatever its row says:
 5. Mdedit and mdview only: a `close` request, so Hub can ask a running window to close.
 
 `tools/samples/<app>/hub.txt` is what each app's latest release would carry; the sizes and SHA-256
-are GitHub's own figures for those releases, and `hub-core`'s `manifest::parse` reads all four.
+are real figures for those releases, and `hub-core`'s `manifest::parse` reads each sample.
 
 ## Shared pieces (do once)
 
-**The script.** `tools/write-hub-txt.ps1` (here, and copied to `markdown-shared-rs/tools/`, plan
-A0). Works in Windows PowerShell 5.1 and PowerShell 7 (`pwsh` is on `ubuntu-latest` and
+**The script.** `tools/write-hub-txt.ps1` (in Hub; moving it to `markdown-shared-rs/tools/` is
+plan A0). Works in Windows PowerShell 5.1 and PowerShell 7 (`pwsh` is on `ubuntu-latest` and
 `windows-latest` runners). Each repository keeps a **copy** in its `tools/` with the shared commit
-in its first line, so a release does not depend on another repository being reachable. It refuses,
+in its first line (use the Hub source commit while the script lives here), so a release does not
+depend on another repository being reachable. It refuses,
 writing nothing, anything the parser would refuse (version, date, names, silent-argument
 characters, 9 files, 128 lines, 16 KiB), so a bad release fails in the workflow.
 
 Until the parser moves to the shared crate (`docs/DECISIONS.md` D-004) an app's own test cannot parse its
 `hub.txt` with Rust; the script's checks mirror the parser's, and Hub's repository parses the
-four samples. The test a Rust crate can run on a folder holding `<app>/hub.txt` is in
+real samples. The test a Rust crate can run on a folder holding `<app>/hub.txt` is in
 `docs/CODE.md` ("parse the samples").
 
 **Where the file is read.** `https://github.com/Kaan88/<repo>/releases/latest/download/hub.txt`.
@@ -343,6 +343,34 @@ helpers, which is why the entry has `setup_closes_app` (D-029). It must keep wri
 the same exe, uninstall key and `wait` list the catalog entry names, or the catalog follows the new
 release.
 
+## Claude Switch (`Kaan88/claude-switch`)
+
+Added to the catalog in D-035. **No release yet**: Hub shows "No release information" and
+offers no install until a published release marked latest carries `hub.txt`. There is no
+`tools/samples/claude-switch/hub.txt`: it needs an actual release's size and SHA-256.
+
+| Item | Value |
+|---|---|
+| kind | `setup` (per-user Inno, `%LOCALAPPDATA%\Programs\Claude Switch`) |
+| exe | `claude-switch.exe` |
+| uninstall | `{4F2C369B-84AF-4A46-AE8B-D22103025F78}_is1` (the Inno `AppId`) |
+| wait | none (no installed helper executables; the main exe is implicit) |
+| setup, silent, scope | `claude-switch-setup.exe`, `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`, `user` |
+| `setup_closes_app` | false (`CloseApplications=no`) |
+
+The release workflow writes `hub.txt` with the copied writer, the first bullet under the
+matching `CHANGELOG.md` version, and the packaged setup's actual size and hash. It ships the
+manifest beside the setup and the bare exe. The Windows MSVC build embeds the icon and
+`VERSIONINFO`; the release fails if the exe version doesn't match the tag. The app has no
+updater of its own, so there is nothing to stand down.
+
+Closing the app ends live Claude Code programs in its embedded terminal tabs. After the owner
+accepts Hub's "Close and update", Hub posts `WM_CLOSE` to visible windows and will not run Setup
+until the app exits. The app asks before quitting with live programs. If close-to-tray hides
+the window instead (or it is already hidden), use the tray's Quit command and confirm there.
+Declining the app's prompt leaves it running. If it stays open past Hub's 30-second wait,
+the update stops without running Setup; quit and retry when ready.
+
 ## Days
 
 | Where | Days |
@@ -355,6 +383,7 @@ release.
 | Inbound | 1.5 |
 | Purge (D-030) | 0: its v0.1.0 release already carries `hub.txt` |
 | Barbican (D-031) | 0 here: its installer work is in its own repository, unreleased |
+| Claude Switch (D-035) | Catalog and packaging wired; unreleased |
 
 Order: the script, then mdedit and mdview with the shared pieces (the first slice), then Sprawl and
 Inbound; none of them has to wait for Hub's window.

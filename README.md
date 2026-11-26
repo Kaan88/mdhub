@@ -1,6 +1,7 @@
 # Hub
 
-A launcher and updater for six apps: **mdedit**, **mdview**, **Sprawl**, **Inbound**, **Purge** and **Barbican**. One
+A launcher and updater for seven apps: **mdedit**, **mdview**, **Sprawl**, **Inbound**, **Purge**,
+**Barbican** and **Claude Switch**. One
 window shows which are installed, which has an update, what the update brings, and installs,
 updates, rolls back and opens them. Windows first. Released as v0.1.3 and earlier on
 `Kaan88/mdhub`, each from a pushed tag.
