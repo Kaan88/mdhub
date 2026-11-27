@@ -304,6 +304,13 @@ impl Card {
         result
     }
 
+    /// The window lost focus with the button down on the card. winit sends no release then
+    /// (the capture is gone), so the press ends here as one let go off every control: a dragged
+    /// thumb stays where it is, nothing is clicked or chosen.
+    pub fn pointer_lost(&mut self) -> Outcome {
+        self.release(-1.0, -1.0)
+    }
+
     pub fn wheel(&mut self, x: f32, y: f32, dy: f32) -> bool {
         match self.menu.input() {
             Some(open) => open.menu.contains(x, y) && open.menu.scroll_by(dy),
@@ -390,6 +397,35 @@ mod tests {
                 "the groups stay as headings"
             );
         }
+    }
+
+    #[test]
+    fn a_lost_pointer_lets_go_of_the_cards_thumb_and_clicks_nothing() {
+        // The smallest window: the card's rows do not fit, so it has a scrollbar.
+        let (w, h) = (520.0, 360.0);
+        let mut bmp = mdshared_text::bitmap::Bitmap::new(w as u32, h as u32);
+        let mut gfx = mdshared_ui::gfx::Gfx::new();
+        let mut p = Painter::new(&mut bmp, &mut gfx, 1.0);
+        let mut c = Card::new(rows(&model()), 0);
+        c.layout(&mut p, Rect::new(0.0, 0.0, w, h));
+        let body = c.form.body_rect();
+        // The thumb, at the top of the track along the body's right edge.
+        let (x, y) = (body.right() - 6.0, body.y + 6.0);
+        c.press(x, y, Mods::default(), 1);
+        assert!(c.pointer_move(x, y + 40.0), "the thumb is held");
+        let held = c.form.scroll();
+        assert!(held > 0.0);
+        assert_eq!(c.pointer_lost(), Outcome::None, "nothing is clicked");
+        c.pointer_move(x, y + 120.0);
+        assert_eq!(c.form.scroll(), held, "the next plain move scrolls nothing");
+        // A press on a toggle that loses its release does not toggle it.
+        c.form.jump_to_category(0);
+        c.layout(&mut p, Rect::new(0.0, 0.0, w, h));
+        let row = c.rows().iter().position(|r| r.id() == Some(START)).unwrap();
+        let toggle = c.form.control_rect(row);
+        c.press(toggle.cx(), toggle.cy(), Mods::default(), 1);
+        assert_eq!(c.pointer_lost(), Outcome::None);
+        assert_eq!(c.form.value(START), Some(Value::Bool(false)));
     }
 
     #[test]

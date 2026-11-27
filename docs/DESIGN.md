@@ -191,7 +191,10 @@ and that target must still exist in the engine. App controls use app ID and acti
 filtered indices. Offers include their owner, release version and issuance serial, so a late
 release cannot answer a replacement even before it has been painted. Focus loss or a target
 removed by a model/layout change disarms the button. Row-menu choices also require press and
-release on the same choice; the settings form keeps its own press/release handling.
+release on the same choice; the settings form keeps its own press/release handling. Losing
+focus with the button down on the card releases it off every control (`Card::pointer_lost`):
+winit sends no release when the capture goes, and the card's scrollbar thumb would otherwise
+follow the next plain move.
 
 Filtering: the wide toolbar always shows the field; under 900 logical px the search button opens
 it, as does Ctrl+F. The toolbar shows Clear while a query is active; an empty result says why.
