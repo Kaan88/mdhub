@@ -1,0 +1,15 @@
+hub: 1
+app: sozluk
+version: 0.1.0
+date: 2026-11-27
+notes: First release: offline TDK Güncel Türkçe Sözlük with word lookup and subtitle line check.
+windows-x86_64.kind: setup
+windows-x86_64.exe: sozluk.exe
+windows-x86_64.uninstall: {4FB1F2BC-2BEF-4862-B431-0EE595F96973}_is1
+windows-x86_64.wait: sozluk.exe
+windows-x86_64.setup: Sozluk-Setup-0.1.0.exe
+windows-x86_64.setup.url: https://github.com/Kaan88/tdk-sozluk-rs/releases/download/v0.1.0/Sozluk-Setup-0.1.0.exe
+windows-x86_64.setup.sha256: 141eef2d8c3ebc2ff93b509f7733dd63f8cbb3c99c654fbee091e62d6d996425
+windows-x86_64.setup.size: 4938017
+windows-x86_64.setup.silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+windows-x86_64.setup.scope: user

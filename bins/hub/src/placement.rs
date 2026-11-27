@@ -3,7 +3,7 @@
 use hub_core::state::WindowPlacement;
 use mdshared_ui::chrome::{TITLE_H, WIN_BTN_W};
 
-pub const DEFAULT_SIZE: (u32, u32) = (860, 660);
+pub const DEFAULT_SIZE: (u32, u32) = (860, 712);
 pub const MIN_SIZE: (u32, u32) = (520, 360);
 
 struct WorkArea {
@@ -218,7 +218,7 @@ mod tests {
             (i32::MAX, i32::MIN),
         ] {
             assert_eq!(
-                initial(Some((860, 660)), None, &[PRIMARY]),
+                initial(Some((860, 712)), None, &[PRIMARY]),
                 initial(
                     None,
                     Some(WindowPlacement { position, ..SAVED }),
@@ -230,8 +230,8 @@ mod tests {
         assert_eq!(
             initial(None, Some(SAVED), &[PRIMARY]),
             Initial {
-                position: Some((370, 120)),
-                size: (860, 660),
+                position: Some((370, 94)),
+                size: (860, 712),
                 maximized: false
             }
         );
@@ -306,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn default_height_fits_the_seven_app_list_and_its_details_above_the_footer() {
+    fn default_height_fits_the_eight_app_list_and_its_details_above_the_footer() {
         let vm = crate::demo::build("claude-switch", crate::vm::View::List).unwrap();
         let (w, h) = DEFAULT_SIZE;
         let g = crate::view::geometry(w as f32, h as f32, &vm);

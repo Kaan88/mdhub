@@ -7,9 +7,9 @@ Current checkout only; `git log` is the history.
 - Latest Hub release: **v0.1.6**, `Kaan88/mdhub`. Its Windows installer, `hub.exe`,
   `hub-update.txt` and `hub.txt` are published from the tag; everything below is in it.
   The owner previously verified an installed copy and the v0.1.0 → v0.1.1 self-update.
-- Seven compiled-in apps: mdedit, mdview, Sprawl, Inbound, Purge, Barbican and Claude Switch
-  (D-035). Checked-in manifests under `tools/samples/` parse and round-trip. Barbican and
-  Claude Switch have no checked-in release sample; without a manifest Hub offers no install.
+- Eight compiled-in apps: mdedit, mdview, Sprawl, Inbound, Purge, Barbican, Claude Switch and
+  Sözlük (D-035, D-042). Checked-in manifests under `tools/samples/` parse and round-trip. Barbican and
+  Claude Switch have no checked-in release sample (Sözlük's is its v0.1.0 `hub.txt`); without a manifest Hub offers no install.
 - Hub reads each app's latest release on GitHub; mdedit and mdview have the legacy fallback
   (D-003). Hub verifies the download before placing or running it. No other servers or accounts.
 - `hub-core` owns manifest, detection, transport, installation, rollback and persistent state.
@@ -26,7 +26,7 @@ Current checkout only; `git log` is the history.
   progress animate; list/grid and notes content crossfade; row menus, the settings card and
   the interval dropdown enter and exit. The loop wakes only for a pending deadline, reduced
   motion snaps, and shots use settled endpoints. Tested motion goes idle after settling.
-- **Window placement (D-037):** default 860×660 logical px, minimum 520×360. Close-to-tray and
+- **Window placement (D-037):** default 860×712 logical px, minimum 520×360. Close-to-tray and
   quit save the normal position, logical client size and maximized state. Restore uses the
   current work areas; an inaccessible saved position falls back to a centered default.
   `--size` and demos bypass saved placement. The caption shows Restore when maximized.
@@ -113,4 +113,5 @@ maxima, not bounds. Tray-only memory, focused backdrop and live network were not
 
 1. Profile the missed first-frame budget and keep open/idle memory and CPU checks.
 2. Get owner review of the polished window and a real tray/backdrop pass outside agent tests.
-3. Verify published release manifests and add samples as Barbican and Claude Switch ship them.
+3. Verify published release manifests and add samples as Barbican and Claude Switch ship them. Sözlük's repository is private (D-042), so Hub
+   shows it with no release information until it is public.

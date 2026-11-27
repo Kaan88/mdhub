@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 /// The icon of each catalog app, by id.
-const ICONS: [(&str, &[u8]); 7] = [
+const ICONS: [(&str, &[u8]); 8] = [
     ("mdedit", include_bytes!("../../../assets/apps/mdedit.png")),
     ("mdview", include_bytes!("../../../assets/apps/mdview.png")),
     ("sprawl", include_bytes!("../../../assets/apps/sprawl.png")),
@@ -26,6 +26,7 @@ const ICONS: [(&str, &[u8]); 7] = [
         "claude-switch",
         include_bytes!("../../../assets/apps/claude-switch.png"),
     ),
+    ("sozluk", include_bytes!("../../../assets/apps/sozluk.png")),
 ];
 
 /// The embedded PNG of app `id`.
