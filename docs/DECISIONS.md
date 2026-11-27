@@ -404,3 +404,10 @@ Moves all four crates together from `5665039d` to `15f013846294ff0e69e7057a10905
 no-new-direct-dependency rule. The lock adds no packages; shared's crates only gain edges to
 `libc` and `skrifa`, already in the lock. No Hub code changes. Would change: a shared change that
 breaks Hub's build, tests or shots.
+
+## D-044 Sözlük's repository is public (2026-11-27)
+The owner made `Kaan88/tdk-sozluk-rs` public, which ends D-042's private-repository exception:
+`releases/latest/download/hub.txt` answers without a token and Hub offers the install. The
+repository carries an MIT `LICENSE`. The checked-in sample is now the v0.3.0 release's own
+`hub.txt` (Turkish interface by default); the AppId, uninstall key and install folder are
+unchanged. Would change: the repository going private again.
