@@ -383,7 +383,7 @@ that the target is hard to find or use at the minimum window size.
 The notes scrollbar is inset from the right resize band: the visible thumb takes a drag and
 the window edge still takes a resize. It uses the shared cursor state, not custom cursors.
 
-## D-042 Sözlük is the eighth catalog app (repository public since D-044)
+## D-042 Sözlük is the eighth catalog app (repository private for now)
 The owner adds `Kaan88/tdk-sozluk-rs`, extending D-031 and D-035: id `sozluk`, name Sözlük, exe
 `sozluk.exe`, tile TDK red `#c62828`, glyph `view`, icon `assets/apps/sozluk.png` (128 px, scaled
 from the app's `assets/icon-256.png`). Its per-user Inno setup (`installer/sozluk.iss` in the
