@@ -558,6 +558,7 @@ pub fn build(name: &str, view: View) -> Option<Vm> {
                 app("purge", Row::NotInstalled, None, r("0.1.0"), false),
                 unreleased("barbican"),
                 unreleased("claude-switch"),
+                unreleased("sozluk"),
             ]);
             v.sel = v.apps.len() - 1;
             v
@@ -662,12 +663,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn claude_switch_demo_shows_the_full_catalog_and_selects_the_unreleased_app() {
+    fn claude_switch_demo_shows_the_full_catalog_and_selects_the_last_unreleased_app() {
         let vm = build("claude-switch", View::List).unwrap();
         let ids: Vec<_> = vm.apps.iter().map(|app| app.id).collect();
         assert_eq!(ids, CATALOG.map(|app| app.id));
         let selected = &vm.apps[vm.sel];
-        assert_eq!(selected.id, "claude-switch");
+        assert_eq!(selected.id, "sozluk");
         assert!(matches!(selected.row, Row::NoInfo(_)));
         assert!(selected.installed.is_none() && selected.latest.is_none());
         assert!(selected.notes.is_empty());

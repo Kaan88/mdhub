@@ -1,5 +1,5 @@
 //! The apps Hub knows: compiled in. Adding one is a new entry and a release of Hub.
-//! Scope, by the owner: mdedit, mdview, Sprawl, Inbound, Purge, Barbican, Claude Switch.
+//! Scope, by the owner: mdedit, mdview, Sprawl, Inbound, Purge, Barbican, Claude Switch, Sözlük.
 
 pub struct CatalogApp {
     /// Lower-case id; the `app:` of its hub.txt.
@@ -33,7 +33,7 @@ pub struct CatalogApp {
     pub glyph: &'static str,
 }
 
-pub const CATALOG: [CatalogApp; 7] = [
+pub const CATALOG: [CatalogApp; 8] = [
     CatalogApp {
         id: "mdedit",
         name: "mdedit",
@@ -154,6 +154,25 @@ pub const CATALOG: [CatalogApp; 7] = [
         tile: [0xd9, 0x77, 0x57],
         glyph: "code",
     },
+    CatalogApp {
+        id: "sozluk",
+        name: "Sözlük",
+        blurb: "Offline TDK Türkçe Sözlük: look up, check subtitle lines",
+        repo: "tdk-sozluk-rs",
+        exe: "sozluk.exe",
+        launch_args: &[],
+        // Provisional until the app ships its installer: no setup exists yet, so the folder
+        // and the AppId (the uninstall key) are not decided. Detection falls back to the
+        // folder and the exe's version resource meanwhile.
+        folder: "Sozluk",
+        machine_folder: None,
+        uninstall_keys: &[],
+        wait: &["sozluk.exe"],
+        setup_closes_app: false,
+        legacy_manifest: None,
+        tile: [0xc6, 0x28, 0x28],
+        glyph: "view",
+    },
 ];
 
 pub fn find(id: &str) -> Option<&'static CatalogApp> {
@@ -222,6 +241,20 @@ mod tests {
         assert_eq!(
             app.latest_url("hub.txt"),
             "https://github.com/Kaan88/claude-switch/releases/latest/download/hub.txt"
+        );
+    }
+
+    #[test]
+    fn sozluks_entry_points_at_its_repository_and_exe_and_has_no_appid_yet() {
+        let app = find("sozluk").unwrap();
+        assert_eq!(app.name, "Sözlük");
+        assert_eq!(app.repo, "tdk-sozluk-rs");
+        assert_eq!(app.exe, "sozluk.exe");
+        assert!(app.uninstall_keys.is_empty());
+        assert_eq!(app.legacy_manifest, None);
+        assert_eq!(
+            app.latest_url("hub.txt"),
+            "https://github.com/Kaan88/tdk-sozluk-rs/releases/latest/download/hub.txt"
         );
     }
 

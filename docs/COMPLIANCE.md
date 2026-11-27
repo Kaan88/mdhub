@@ -1,7 +1,7 @@
 # What an app must do to work with Hub
 
 **Read this first if you are an agent (or a person) working in another repository** (mdedit, mdview,
-Sprawl, Inbound, Purge, or a later app) and the task says "for Hub", "hub.txt", "make it work with the
+Sprawl, Inbound, Purge, Barbican, Claude Switch, Sözlük, or a later app) and the task says "for Hub", "hub.txt", "make it work with the
 launcher". This is the contract. It is kept true: if the code in `crates/hub-core` disagrees with
 this file, the code is right and this file is a bug, so say so in your pull request.
 
@@ -69,14 +69,14 @@ windows-x86_64.setup.scope: machine
 ```
 
 Examples for every catalog app that has a release to take them from: `tools/samples/<app>/hub.txt`
-(Purge's is its v0.1.0 release's own `hub.txt`; Barbican and Claude Switch have none until released).
+(Purge's is its v0.1.0 release's own `hub.txt`; Barbican, Claude Switch and Sözlük have none until released).
 `crates/hub-core/tests/samples.rs` checks that each one parses, and that the only app without a
 sample is the one it names.
 
 | Key | Rule |
 |---|---|
 | `hub: 1` | First meaningful line. Any other number is refused. |
-| `app` | The catalog id (`mdedit`, `mdview`, `sprawl`, `inbound`, `purge`, `barbican`, `claude-switch`). Must match. |
+| `app` | The catalog id (`mdedit`, `mdview`, `sprawl`, `inbound`, `purge`, `barbican`, `claude-switch`, `sozluk`). Must match. |
 | `version` | `X.Y.Z` or `X.Y.Z-pre`. Hub compares versions SemVer-style. |
 | `date` | `YYYY-MM-DD`, the release day. |
 | `notes` | One line, at most 1024 **bytes**, no control characters. |

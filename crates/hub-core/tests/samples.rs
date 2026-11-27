@@ -10,7 +10,7 @@ const SAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tools/samples/
 
 /// Catalog apps with no release to take a sample from (D-031, D-035). The test below fails if
 /// an app listed here gains a sample.
-const NO_SAMPLE: [&str; 2] = ["barbican", "claude-switch"];
+const NO_SAMPLE: [&str; 3] = ["barbican", "claude-switch", "sozluk"];
 
 #[test]
 fn every_catalog_apps_sample_parses_and_round_trips() {

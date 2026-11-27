@@ -382,3 +382,17 @@ that the target is hard to find or use at the minimum window size.
 
 The notes scrollbar is inset from the right resize band: the visible thumb takes a drag and
 the window edge still takes a resize. It uses the shared cursor state, not custom cursors.
+
+## D-042 Sözlük is the eighth catalog app (placeholder entry, repository private)
+The owner adds `Kaan88/tdk-sozluk-rs`, extending D-031 and D-035: id `sozluk`, name Sözlük, exe
+`sozluk.exe`, tile TDK red `#c62828`, glyph `view`, icon `assets/apps/sozluk.png` (128 px, scaled
+from the app's `assets/icon-256.png`). The app has no commit, release, setup or AppId yet, so
+three fields are provisional and must be revisited when its installer exists: `folder` is
+`Sozluk` (ASCII, under `Programs`), `uninstall_keys` is empty (detection uses the folder and the
+exe's version resource), and `setup_closes_app` is false with `wait` naming only `sozluk.exe`.
+Without a `hub.txt` the row reads "No release information" and Hub offers no install, as for
+Barbican and Claude Switch. The repository is private and Hub sends no token, so the manifest
+URL answers 404 until the repository or its release assets are public; that is not worked around.
+Eight rows no longer fit the details pane above the status bar at 860x660, so D-037's default
+height grows by one row (52 px) to 860x712. Would change: the app's installer fixing a different
+folder or AppId, or the app staying private.
