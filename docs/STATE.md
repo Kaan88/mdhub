@@ -4,7 +4,7 @@ Current checkout only; `git log` is the history.
 
 ## Release and scope
 
-- Latest Hub release: **v0.1.6**, `Kaan88/mdhub`. Its Windows installer, `hub.exe`,
+- Latest Hub release: **v0.1.7**, `Kaan88/mdhub`. Its Windows installer, `hub.exe`,
   `hub-update.txt` and `hub.txt` are published from the tag; everything below is in it.
   The owner previously verified an installed copy and the v0.1.0 → v0.1.1 self-update.
 - Eight compiled-in apps: mdedit, mdview, Sprawl, Inbound, Purge, Barbican, Claude Switch and
@@ -65,7 +65,7 @@ Current checkout only; `git log` is the history.
 ## Windows verification
 
 - `cargo fmt --all --check`, workspace clippy and `test-hooks` clippy passed with warnings
-  denied. Release workspace tests: 218 Hub + 205 core + 2 sample tests passed, 4 existing
+  denied. Release workspace tests: 218 Hub + 206 core + 2 sample tests passed, 4 existing
   ignores. Both merge regressions failed against targeted scratch reverts.
 - Two renders of 440 PNGs were byte-identical; `shots-check` reported 0 bad. Reviewed the
   small Install menu, long versions, filter states, close offers and notes focus in both
@@ -76,20 +76,22 @@ Current checkout only; `git log` is the history.
   the fake programs folder. Notes retries from keyboard focus and reopens from cache.
   Caption/menu and small-menu/row motion both settled at 0 ms CPU over two seconds.
 
-Seven interleaved Windows `--behind --demo main --trace` runs per build, release with
-`test-hooks` and fresh scratch roots. Baseline is `81ec2a3` (input polish before the merge).
+Seven interleaved Windows `--behind --no-session --demo main --exit-after-ms 5000 --trace`
+runs per build, release with `test-hooks` and fresh scratch roots. Baseline is `v0.1.6`;
+after is v0.1.7 (Sözlük, the 712 px default height and shared at `15f0138`).
 
-| Metric | Before | Merged | Budget |
+| Metric | v0.1.6 | v0.1.7 | Budget |
 |---|---:|---:|---:|
-| First frame, median / max | 139.5 / 338.5 ms | 139.7 / 174.1 ms | <100 ms |
-| Presented, median / max | 173.9 / 407.6 ms | 171.9 / 209.1 ms | — |
-| Private memory, range | 9.9 MiB | 9.8–9.9 MiB | <30 MiB |
-| Idle CPU, every ~2 s sample | 0 ms | 0 ms | 0 ms |
-| Test-hooks exe | 4,092,928 bytes | 4,094,464 bytes | — |
+| First frame, median / max | 53.9 / 56.0 ms | 53.7 / 58.1 ms | <100 ms |
+| Private memory at exit, range | 10.0–10.1 MiB | 10.4–10.5 MiB | <30 MiB |
+| CPU from window open to exit (5 s) | 0–15.6 ms | 0–15.6 ms | 0 ms idle |
+| Test-hooks exe | 4,094,464 bytes | 4,442,624 bytes | — |
 
-Every run on both builds missed the 100 ms budget. The first-frame medians are 0.2 ms
-apart; the baseline maximum is one slow run whose cause is unknown. These are sample
-maxima, not bounds. Tray-only memory, focused backdrop and live network were not measured.
+Every run on both builds met the 100 ms budget; the earlier 139 ms medians were taken on
+the same PC under different load, so the change is not Hub's. The CPU figure is one 15.6 ms
+timer tick in some runs of both builds, spent while the open settles, not a separate idle
+sample. The +0.4 MiB and +340 KiB come from the shared bump. Tray-only memory, focused
+backdrop and live network were not measured.
 
 ## Not verified or still at risk
 
@@ -111,7 +113,7 @@ maxima, not bounds. Tray-only memory, focused backdrop and live network were not
 
 ## Next
 
-1. Profile the missed first-frame budget and keep open/idle memory and CPU checks.
+1. Keep first-frame, open/idle memory and CPU checks; watch the exe size shared adds.
 2. Get owner review of the polished window and a real tray/backdrop pass outside agent tests.
 3. Verify published release manifests and add samples as Barbican and Claude Switch ship them. Sözlük's repository is private (D-042), so Hub
    shows it with no release information until it is public.
