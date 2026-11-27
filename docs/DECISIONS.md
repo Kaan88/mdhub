@@ -383,7 +383,7 @@ that the target is hard to find or use at the minimum window size.
 The notes scrollbar is inset from the right resize band: the visible thumb takes a drag and
 the window edge still takes a resize. It uses the shared cursor state, not custom cursors.
 
-## D-042 Sözlük is the eighth catalog app (repository private for now)
+## D-042 Sözlük is the eighth catalog app (repository public since D-044)
 The owner adds `Kaan88/tdk-sozluk-rs`, extending D-031 and D-035: id `sozluk`, name Sözlük, exe
 `sozluk.exe`, tile TDK red `#c62828`, glyph `view`, icon `assets/apps/sozluk.png` (128 px, scaled
 from the app's `assets/icon-256.png`). Its per-user Inno setup (`installer/sozluk.iss` in the
@@ -404,3 +404,10 @@ Moves all four crates together from `5665039d` to `15f013846294ff0e69e7057a10905
 no-new-direct-dependency rule. The lock adds no packages; shared's crates only gain edges to
 `libc` and `skrifa`, already in the lock. No Hub code changes. Would change: a shared change that
 breaks Hub's build, tests or shots.
+
+## D-044 Sözlük's repository is public (2026-11-27)
+The owner made `Kaan88/tdk-sozluk-rs` public, which ends D-042's private-repository exception:
+`releases/latest/download/hub.txt` answers without a token and Hub offers the install. The
+repository carries an MIT `LICENSE`. The checked-in sample is now the v0.3.0 release's own
+`hub.txt` (Turkish interface by default); the AppId, uninstall key and install folder are
+unchanged. Would change: the repository going private again.

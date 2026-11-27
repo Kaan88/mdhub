@@ -9,7 +9,7 @@ Current checkout only; `git log` is the history.
   The owner previously verified an installed copy and the v0.1.0 → v0.1.1 self-update.
 - Eight compiled-in apps: mdedit, mdview, Sprawl, Inbound, Purge, Barbican, Claude Switch and
   Sözlük (D-035, D-042). Checked-in manifests under `tools/samples/` parse and round-trip. Barbican and
-  Claude Switch have no checked-in release sample (Sözlük's is its v0.1.0 `hub.txt`); without a manifest Hub offers no install.
+  Claude Switch have no checked-in release sample (Sözlük's is its v0.3.0 `hub.txt`); without a manifest Hub offers no install.
 - Hub reads each app's latest release on GitHub; mdedit and mdview have the legacy fallback
   (D-003). Hub verifies the download before placing or running it. No other servers or accounts.
 - `hub-core` owns manifest, detection, transport, installation, rollback and persistent state.
@@ -115,5 +115,5 @@ backdrop and live network were not measured.
 
 1. Keep first-frame, open/idle memory and CPU checks; watch the exe size shared adds.
 2. Get owner review of the polished window and a real tray/backdrop pass outside agent tests.
-3. Verify published release manifests and add samples as Barbican and Claude Switch ship them. Sözlük's repository is private (D-042), so Hub
-   shows it with no release information until it is public.
+3. Verify published release manifests and add samples as Barbican and Claude Switch ship them. Sözlük's repository is public
+   (D-044), so Hub reads its releases.
