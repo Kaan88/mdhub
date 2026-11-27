@@ -31,7 +31,8 @@ Current checkout only; `git log` is the history.
   current work areas; an inaccessible saved position falls back to a centered default.
   `--size` and demos bypass saved placement. The caption shows Restore when maximized.
 - **Activation (D-038):** ordinary controls arm on press and activate on release over the
-  same still-available target. Focus loss cancels. App actions use catalog ID and action,
+  same still-available target. Focus loss cancels, and lets go of a press on the settings
+  card (its scrollbar thumb) off every control. App actions use catalog ID and action,
   and an offer is scoped to owner, version and issuance; a replacement cannot take its
   consent. Drag, resize and notes scrollbar gestures still start on press.
 - **Notes and filtering (D-039):** notes has its own keys and scroll; Tab/Shift+Tab reaches

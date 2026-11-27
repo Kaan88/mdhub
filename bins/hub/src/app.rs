@@ -654,6 +654,20 @@ impl App {
         }
     }
 
+    /// The window lost focus with the button down on the card: its press ends there and then, or
+    /// its scrollbar's thumb would follow the next plain move (and `cancel_press` forgets the
+    /// press, so not even a later release would reach the card).
+    fn end_settings_press(&mut self) {
+        if !std::mem::take(&mut self.settings_pressed) {
+            return;
+        }
+        let outcome = match self.settings.input() {
+            Some(f) => f.pointer_lost(),
+            None => return,
+        };
+        self.settings_outcome(outcome);
+    }
+
     fn settings_release(&mut self) {
         let (x, y) = self.mouse.unwrap_or((-1.0, -1.0));
         let outcome = match self.settings.input() {
@@ -1012,6 +1026,7 @@ impl ApplicationHandler<Event> for App {
                 }
                 if !focused {
                     self.end_bar_drag();
+                    self.end_settings_press();
                     self.cancel_press();
                 }
                 self.focused = focused;
