@@ -113,5 +113,5 @@ maxima, not bounds. Tray-only memory, focused backdrop and live network were not
 
 1. Profile the missed first-frame budget and keep open/idle memory and CPU checks.
 2. Get owner review of the polished window and a real tray/backdrop pass outside agent tests.
-3. Verify published release manifests and add samples as Barbican, Claude Switch and Sözlük ship them. Sözlük's repository is private and has no
-   release, setup or AppId yet (D-042): its folder `Sozluk` and empty uninstall key are provisional.
+3. Verify published release manifests and add samples as Barbican, Claude Switch and Sözlük ship them. Sözlük's repository is private (D-042), so Hub
+   shows it with no release information until it is public.

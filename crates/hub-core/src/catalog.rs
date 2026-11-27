@@ -161,14 +161,13 @@ pub const CATALOG: [CatalogApp; 8] = [
         repo: "tdk-sozluk-rs",
         exe: "sozluk.exe",
         launch_args: &[],
-        // Provisional until the app ships its installer: no setup exists yet, so the folder
-        // and the AppId (the uninstall key) are not decided. Detection falls back to the
-        // folder and the exe's version resource meanwhile.
+        // Per-user Inno setup (installer/sozluk.iss in the app's repository): DefaultDirName
+        // `{localappdata}\Programs\Sozluk`, AppId below. The installer sets CloseApplications=yes.
         folder: "Sozluk",
         machine_folder: None,
-        uninstall_keys: &[],
+        uninstall_keys: &["{4FB1F2BC-2BEF-4862-B431-0EE595F96973}_is1"],
         wait: &["sozluk.exe"],
-        setup_closes_app: false,
+        setup_closes_app: true,
         legacy_manifest: None,
         tile: [0xc6, 0x28, 0x28],
         glyph: "view",
@@ -207,7 +206,10 @@ mod tests {
             .filter(|a| a.setup_closes_app)
             .map(|a| a.id)
             .collect();
-        assert_eq!(flagged, ["sprawl", "inbound", "purge", "barbican"]);
+        assert_eq!(
+            flagged,
+            ["sprawl", "inbound", "purge", "barbican", "sozluk"]
+        );
     }
 
     #[test]
@@ -245,12 +247,18 @@ mod tests {
     }
 
     #[test]
-    fn sozluks_entry_points_at_its_repository_and_exe_and_has_no_appid_yet() {
+    fn sozluks_entry_matches_its_installer() {
         let app = find("sozluk").unwrap();
         assert_eq!(app.name, "Sözlük");
         assert_eq!(app.repo, "tdk-sozluk-rs");
         assert_eq!(app.exe, "sozluk.exe");
-        assert!(app.uninstall_keys.is_empty());
+        assert_eq!(app.folder, "Sozluk");
+        assert_eq!(app.machine_folder, None);
+        assert_eq!(
+            app.uninstall_keys,
+            ["{4FB1F2BC-2BEF-4862-B431-0EE595F96973}_is1"]
+        );
+        assert!(app.wait.contains(&"sozluk.exe"));
         assert_eq!(app.legacy_manifest, None);
         assert_eq!(
             app.latest_url("hub.txt"),
