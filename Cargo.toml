@@ -9,10 +9,10 @@ publish = false
 
 # The shared crates, moved together (docs/CODE.md).
 [workspace.dependencies]
-mdshared-app = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "5665039d08d1e97964685ac3ed6e050b69bac467" }
-mdshared-text = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "5665039d08d1e97964685ac3ed6e050b69bac467" }
-mdshared-ui = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "5665039d08d1e97964685ac3ed6e050b69bac467" }
-mdshared-fetch = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "5665039d08d1e97964685ac3ed6e050b69bac467" }
+mdshared-app = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "15f013846294ff0e69e7057a10905aa9c1a301de" }
+mdshared-text = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "15f013846294ff0e69e7057a10905aa9c1a301de" }
+mdshared-ui = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "15f013846294ff0e69e7057a10905aa9c1a301de" }
+mdshared-fetch = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "15f013846294ff0e69e7057a10905aa9c1a301de" }
 
 [profile.release]
 opt-level = 3
