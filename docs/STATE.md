@@ -22,7 +22,7 @@ Current checkout only; `git log` is the history.
   The initial check is scheduled two minutes after launch, not run on the launch path.
   The Run-key setting is off by default. Hub's self-update stages first and swaps on
   Restart now or quit; it does not swap at the next start.
-- **Motion (D-036):** all four shared crates are pinned at `5665039`. Hovers, statuses and
+- **Motion (D-036, D-043):** all four shared crates are pinned at `15f0138`. Hovers, statuses and
   progress animate; list/grid and notes content crossfade; row menus, the settings card and
   the interval dropdown enter and exit. The loop wakes only for a pending deadline, reduced
   motion snaps, and shots use settled endpoints. Tested motion goes idle after settling.

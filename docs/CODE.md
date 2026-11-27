@@ -3,7 +3,7 @@
 ## Layout
 
 ```
-Cargo.toml              workspace; the four shared crates pinned at 5665039d08d1e97964685ac3ed6e050b69bac467
+Cargo.toml              workspace; the four shared crates pinned at 15f013846294ff0e69e7057a10905aa9c1a301de
 crates/hub-core/src     catalog model manifest state detect check transport install   (no window)
 bins/hub/src            vm view grid panes ui   draw a Vm        demo shot   --shot and its states
                          glue work app cli trace the window and the engine behind it; motion popup

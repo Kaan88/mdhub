@@ -397,3 +397,10 @@ its release assets) is public. That is not worked around. Its v0.1.0 release exi
 Eight rows no longer fit the details pane above the status bar at 860x660, so D-037's default
 height grows by one row (52 px) to 860x712. Would change: a change of the app's installer folder
 or AppId, or the app staying private.
+
+## D-043 Pin shared at 15f0138 (2026-11-27)
+Moves all four crates together from `5665039d` to `15f013846294ff0e69e7057a10905aa9c1a301de`
+(shared `main`, 87 commits on), superseding D-036's pin but not its motion choices or D-006's
+no-new-direct-dependency rule. The lock adds no packages; shared's crates only gain edges to
+`libc` and `skrifa`, already in the lock. No Hub code changes. Would change: a shared change that
+breaks Hub's build, tests or shots.
