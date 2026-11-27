@@ -392,8 +392,8 @@ app's repository) installs into `%LOCALAPPDATA%\Programs\Sozluk` with uninstall 
 `setup_closes_app` (D-029) and lists `sozluk.exe` in `wait`.
 The repository is private and Hub sends no token, so `releases/latest/download/hub.txt` answers
 404 and the row reads "No release information" with no install offered, until the repository (or
-its release assets) is public. That is not worked around. No sample `hub.txt` is checked in
-until a release is reachable (`NO_SAMPLE`).
+its release assets) is public. That is not worked around. Its v0.1.0 release exists (setup
+`Sozluk-Setup-0.1.0.exe` and `hub.txt`); the checked-in sample is that release's own `hub.txt`.
 Eight rows no longer fit the details pane above the status bar at 860x660, so D-037's default
 height grows by one row (52 px) to 860x712. Would change: a change of the app's installer folder
 or AppId, or the app staying private.
